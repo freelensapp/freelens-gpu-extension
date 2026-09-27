@@ -1,6 +1,6 @@
 # Freelens GPU Extension
 
-[![npm](https://img.shields.io/npm/v/%40tal-naeh%2Ffreelens-gpu-extension)](https://www.npmjs.com/package/@tal-naeh/freelens-gpu-extension)
+[![npm](https://img.shields.io/npm/v/%40freelensapp%2Fgpu-extension)](https://www.npmjs.com/package/@freelensapp/gpu-extension)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Per-pod **GPU usage inside [Freelens](https://freelens.app)**: utilisation, VRAM and power for every pod that holds a GPU, plus a GPU section in the Pod and Node detail drawers.
@@ -90,11 +90,11 @@ Also:
 Open the Freelens **Extensions** page (`ctrl`+`shift`+`E` / `cmd`+`shift`+`E`), paste the npm name and click **Install**:
 
 ```text
-@tal-naeh/freelens-gpu-extension
+@freelensapp/gpu-extension
 ```
 
 Alternatively download the `.tgz` from the
-[GitHub releases](https://github.com/Tal-Naeh/freelens-gpu-extension/releases) page and drag it into the Freelens
+[GitHub releases](https://github.com/freelensapp/freelens-gpu-extension/releases) page and drag it into the Freelens
 window, or paste its absolute path on the Extensions page. After an upgrade, fully restart Freelens; the page title
 shows the loaded version.
 
@@ -127,7 +127,7 @@ pnpm pack            # prepack runs the build, then writes the .tgz in the repo 
 
 ```sh
 pnpm pack
-# → tal-naeh-freelens-gpu-extension-<version>.tgz
+# → freelensapp-gpu-extension-<version>.tgz
 ```
 
 Open Freelens → Extensions → paste the absolute path of the `.tgz` (or drag it into the window) → **Install** →

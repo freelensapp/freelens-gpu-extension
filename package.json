@@ -1,14 +1,14 @@
 {
-  "name": "@tal-naeh/freelens-gpu-extension",
+  "name": "@freelensapp/gpu-extension",
   "version": "0.7.1",
   "description": "Freelens extension for GPUs — per-pod and per-device GPU utilisation, VRAM and power from dcgm-exporter or a per-process exporter, zero cluster footprint",
-  "homepage": "https://github.com/Tal-Naeh/freelens-gpu-extension",
+  "homepage": "https://github.com/freelensapp/freelens-gpu-extension",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Tal-Naeh/freelens-gpu-extension.git",
+    "url": "git+https://github.com/freelensapp/freelens-gpu-extension.git",
     "directory": "."
   },
-  "bugs": "https://github.com/Tal-Naeh/freelens-gpu-extension/issues",
+  "bugs": "https://github.com/freelensapp/freelens-gpu-extension/issues",
   "license": "MIT",
   "author": {
     "name": "Tal Naeh",
