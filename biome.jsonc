@@ -1,6 +1,7 @@
 {
   // Ignore mismatch for Biome version to make Renovate updates without error
-  "$schema": "https://biomejs.dev/schemas/2.5.1/schema.json",
+  // trunk-ignore(biome/deserialize)
+  "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
   "assist": {
     "actions": {
       "source": {
@@ -26,6 +27,14 @@
   },
   "files": {
     "includes": ["**", "!**/.trunk/**", "!**/build/**", "!**/dist/**"]
+  },
+  "css": {
+    "formatter": {
+      "enabled": true
+    },
+    "linter": {
+      "enabled": true
+    }
   },
   "formatter": {
     "attributePosition": "auto",
