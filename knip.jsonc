@@ -4,7 +4,8 @@
   "entry": ["src/main/index.ts", "src/renderer/index.tsx"],
   "project": ["*.{js,mjs,ts}", "src/**/*.{ts,tsx}"],
 
-  "ignoreBinaries": ["yq"],
+  // electron-rebuild runs in the Freelens checkout of integration-tests.yaml, not in this package.
+  "ignoreBinaries": ["electron-rebuild", "yq"],
   "ignoreDependencies": [
     // Only referenced from tsconfig.json "paths": it pins the Freelens core typings that
     // moduleResolution=bundler cannot find through the package's exports map.

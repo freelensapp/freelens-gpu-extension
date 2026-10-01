@@ -1,0 +1,256 @@
+# Pods of the fake GPU fixture. up.sh fills in __WHOLE_NODE__, __MIG_NODE__ and
+# __BUSYBOX__. The "exporters" are busybox httpd servers for the ConfigMaps
+# built from the unit-test fixtures; the workloads are named as in those
+# fixtures and request the fake resources advertised on the nodes.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nvidia-dcgm-exporter-7xk2p
+  namespace: gpu-operator
+  labels:
+    app: nvidia-dcgm-exporter
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: __WHOLE_NODE__
+  terminationGracePeriodSeconds: 1
+  containers:
+    - name: nvidia-dcgm-exporter
+      image: __BUSYBOX__
+      imagePullPolicy: IfNotPresent
+      command:
+        - httpd
+        - -f
+        - -p
+        - "9400"
+        - -h
+        - /www
+      ports:
+        - name: metrics
+          containerPort: 9400
+      volumeMounts:
+        - name: www
+          mountPath: /www
+  volumes:
+    - name: www
+      configMap:
+        name: dcgm-whole
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nvidia-dcgm-exporter-m9q4t
+  namespace: gpu-operator
+  labels:
+    app: nvidia-dcgm-exporter
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: __MIG_NODE__
+  tolerations:
+    - operator: Exists
+  terminationGracePeriodSeconds: 1
+  containers:
+    - name: nvidia-dcgm-exporter
+      image: __BUSYBOX__
+      imagePullPolicy: IfNotPresent
+      command:
+        - httpd
+        - -f
+        - -p
+        - "9400"
+        - -h
+        - /www
+      ports:
+        - name: metrics
+          containerPort: 9400
+      volumeMounts:
+        - name: www
+          mountPath: /www
+  volumes:
+    - name: www
+      configMap:
+        name: dcgm-mig
+---
+# Serves the vLLM metrics fixture on port 8000 for the Inference view.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vllm-0
+  namespace: ml
+  labels:
+    app: vllm
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: __WHOLE_NODE__
+  terminationGracePeriodSeconds: 1
+  containers:
+    - name: vllm
+      image: __BUSYBOX__
+      imagePullPolicy: IfNotPresent
+      command:
+        - httpd
+        - -f
+        - -p
+        - "8000"
+        - -h
+        - /www
+      ports:
+        - name: http
+          containerPort: 8000
+      resources:
+        limits:
+          nvidia.com/gpu: "2"
+      volumeMounts:
+        - name: www
+          mountPath: /www
+  volumes:
+    - name: www
+      configMap:
+        name: vllm-metrics
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: tei-7d9f-x1
+  namespace: embeddings
+  labels:
+    app: tei
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: __WHOLE_NODE__
+  terminationGracePeriodSeconds: 1
+  containers:
+    - name: tei
+      image: __BUSYBOX__
+      imagePullPolicy: IfNotPresent
+      command:
+        - sleep
+        - infinity
+      resources:
+        limits:
+          nvidia.com/gpu: "1"
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: transcription-0
+  namespace: it-dgx1
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: __MIG_NODE__
+  tolerations:
+    - operator: Exists
+  terminationGracePeriodSeconds: 1
+  containers:
+    - name: worker
+      image: __BUSYBOX__
+      imagePullPolicy: IfNotPresent
+      command:
+        - sleep
+        - infinity
+      resources:
+        limits:
+          nvidia.com/mig-1g.10gb: "1"
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: transcription-1
+  namespace: it-dgx1
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: __MIG_NODE__
+  tolerations:
+    - operator: Exists
+  terminationGracePeriodSeconds: 1
+  containers:
+    - name: worker
+      image: __BUSYBOX__
+      imagePullPolicy: IfNotPresent
+      command:
+        - sleep
+        - infinity
+      resources:
+        limits:
+          nvidia.com/mig-1g.10gb: "1"
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ocr-0
+  namespace: it-dgx2
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: __MIG_NODE__
+  tolerations:
+    - operator: Exists
+  terminationGracePeriodSeconds: 1
+  containers:
+    - name: worker
+      image: __BUSYBOX__
+      imagePullPolicy: IfNotPresent
+      command:
+        - sleep
+        - infinity
+      resources:
+        limits:
+          nvidia.com/mig-1g.10gb: "1"
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vllm-0
+  namespace: it-dgx2
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: __MIG_NODE__
+  tolerations:
+    - operator: Exists
+  terminationGracePeriodSeconds: 1
+  containers:
+    - name: vllm
+      image: __BUSYBOX__
+      imagePullPolicy: IfNotPresent
+      command:
+        - sleep
+        - infinity
+      resources:
+        limits:
+          nvidia.com/mig-3g.40gb: "1"
+---
+# Asks for more whole GPUs than any node has: can never be scheduled.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: train-big
+  namespace: ml
+spec:
+  terminationGracePeriodSeconds: 1
+  containers:
+    - name: trainer
+      image: __BUSYBOX__
+      imagePullPolicy: IfNotPresent
+      command:
+        - sleep
+        - infinity
+      resources:
+        limits:
+          nvidia.com/gpu: "16"
+---
+# Asks for a MIG profile no node offers: can never be scheduled.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: needs-a-slice
+  namespace: research
+spec:
+  terminationGracePeriodSeconds: 1
+  containers:
+    - name: notebook
+      image: __BUSYBOX__
+      imagePullPolicy: IfNotPresent
+      command:
+        - sleep
+        - infinity
+      resources:
+        limits:
+          nvidia.com/mig-2g.20gb: "1"

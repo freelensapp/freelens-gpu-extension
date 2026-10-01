@@ -1,0 +1,8 @@
+# Two-node kind cluster for the integration tests: up.sh advertises whole GPUs
+# on the worker and MIG slices on the control plane, so the Allocation view and
+# the per-node attribution have two different nodes to show.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+  - role: worker
