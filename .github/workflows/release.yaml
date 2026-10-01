@@ -15,8 +15,8 @@ jobs:
 
     runs-on: ubuntu-24.04-arm
     environment: publishing
+
     env:
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
       VITE_PRESERVE_MODULES: "false"
 
     steps:
@@ -61,6 +61,18 @@ jobs:
         run: timeout 300 pnpm install --color=always --prefer-offline --frozen-lockfile
 
       - name: Build packages
+        id: build-packages
+        run: pnpm --color=always --stream build
+        continue-on-error: true
+
+      - name: Build packages (retry)
+        id: build-packages-2
+        if: steps.build-packages.outcome == 'failure'
+        run: pnpm --color=always --stream build
+        continue-on-error: true
+
+      - name: Build packages (retry 2)
+        if: steps.build-packages-2.outcome == 'failure'
         run: pnpm --color=always --stream build
 
       - name: Pack packages
@@ -78,8 +90,9 @@ jobs:
               --no-git-checks \
               --tag ${dist_tag}
           else
-            # Trusted Publishing (OIDC): stage the version; a maintainer approves it on npmjs.com.
-            NPM_CONFIG_PROVENANCE=true npm stage publish --access public --tag ${dist_tag}
+            NPM_CONFIG_PROVENANCE=true pnpm --color=always publish -r \
+              --no-git-checks \
+              --tag ${dist_tag}
           fi
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -98,8 +111,9 @@ jobs:
               --no-git-checks \
               --tag ${dist_tag}
           else
-            # Trusted Publishing (OIDC): stage the version; a maintainer approves it on npmjs.com.
-            NPM_CONFIG_PROVENANCE=true npm stage publish --access public --tag ${dist_tag}
+            NPM_CONFIG_PROVENANCE=true pnpm --color=always publish -r \
+              --no-git-checks \
+              --tag ${dist_tag}
           fi
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -117,12 +131,34 @@ jobs:
               --no-git-checks \
               --tag ${dist_tag}
           else
-            # Trusted Publishing (OIDC): stage the version; a maintainer approves it on npmjs.com.
-            NPM_CONFIG_PROVENANCE=true npm stage publish --access public --tag ${dist_tag}
+            NPM_CONFIG_PROVENANCE=true pnpm --color=always publish -r \
+              --no-git-checks \
+              --tag ${dist_tag}
           fi
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        continue-on-error: true
+
+      - name: Create SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          format: spdx-json
+          output-file: sbom.spdx.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          upload-release-assets: false
+
+      - name: Normalize SBOM filename
+        shell: bash
+        run: |
+          for f in *.tgz; do
+            mv sbom.spdx.json "${f%.tgz}-spdx.json"
+          done
+
+      - name: Make checksums
+        shell: bash
+        run: |
+          for f in *.tgz *-spdx.json; do
+            sha256sum "$f" | tee "$f.sha256"
+          done
 
       - name: Create release
         uses: softprops/action-gh-release@v3
@@ -130,3 +166,6 @@ jobs:
           fail_on_unmatched_files: true
           files: |-
             *.tgz
+            *.tgz.sha256
+            *-spdx.json
+            *-spdx.json.sha256

@@ -148,8 +148,9 @@ store polls every 20 s while a GPU view is mounted.
 
 ## Releasing
 
-See [docs/publishing.md](docs/publishing.md): version bump → `vX.Y.Z` tag → CI stages the package on npm via Trusted
-Publishing and creates the GitHub Release → a maintainer approves the staged version.
+Releases follow the freelensapp organization process shared by every extension, see
+[CONTRIBUTING.md](CONTRIBUTING.md#releasing): a maintainer runs the version workflow, the bump pull request is merged,
+the tag is created by a workflow and the Release workflow publishes to npm and creates the GitHub Release.
 
 ## Repository layout
 

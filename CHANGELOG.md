@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Moved to the freelensapp organization as `@freelensapp/gpu-extension`: the organization workflows (release with
+  provenance, SBOM and checksums, Claude, npm audit and dedupe, trunk and biome upgrades), Playwright integration tests
+  inside a packaged Freelens on kind with a fake GPU fixture (`integration/fixtures/gpu/`), agent guides.
+
 ## 0.7.1
 
 - Fix: pods on MIG slices were each charged their whole card's power (DCGM reports the card's draw on every slice),
