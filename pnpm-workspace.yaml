@@ -1,0 +1,15 @@
+# pnpm 11+: allowBuilds replaces onlyBuiltDependencies (same approvals as before)
+allowBuilds:
+  '@parcel/watcher': true
+  electron: true
+  esbuild: true
+  node-pty: true
+  playwright: true
+
+shellEmulator: true
+
+# Dev-only transitive deps of @freelensapp/core (types only; the host app supplies it at runtime).
+# Pinned past their advisories so Dependabot stays clean.
+overrides:
+  dompurify: ^3.4.16
+  decode-uri-component: ^0.5.0

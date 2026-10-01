@@ -1,0 +1,87 @@
+{
+  "name": "@freelensapp/gpu-extension",
+  "version": "0.7.1",
+  "description": "Freelens extension for GPUs — per-pod and per-device GPU utilisation, VRAM and power from dcgm-exporter or a per-process exporter, zero cluster footprint",
+  "homepage": "https://github.com/freelensapp/freelens-gpu-extension",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/freelensapp/freelens-gpu-extension.git",
+    "directory": "."
+  },
+  "bugs": "https://github.com/freelensapp/freelens-gpu-extension/issues",
+  "license": "MIT",
+  "author": {
+    "name": "Tal Naeh",
+    "url": "https://github.com/Tal-Naeh"
+  },
+  "main": "out/main/index.js",
+  "renderer": "out/renderer/index.js",
+  "files": [
+    "out/**/*"
+  ],
+  "engines": {
+    "node": ">= 22.0.0",
+    "freelens": "^1.8.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "scripts": {
+    "biome": "pnpm dlx @biomejs/biome@2.5.14",
+    "biome:check": "pnpm biome check",
+    "biome:fix": "pnpm biome check --fix",
+    "lint": "pnpm lint:check",
+    "lint:check": "pnpm biome:check",
+    "lint:fix": "pnpm biome:fix",
+    "knip": "pnpm dlx knip@6.38.0 --dependencies --no-gitignore",
+    "knip:check": "pnpm clean:out && pnpm \"/^knip:(development|production)\\$/\"",
+    "knip:development": "pnpm knip",
+    "knip:production": "pnpm knip --production --strict",
+    "test": "pnpm test:unit",
+    "test:unit": "vitest run",
+    "smoke:main": "node scripts/smoke-main.cjs",
+    "type:check": "tsc --noEmit -p tsconfig.json --composite false",
+    "prebuild": "pnpm type:check",
+    "build": "electron-vite build && pnpm smoke:main",
+    "build:production": "VITE_PRESERVE_MODULES=false electron-vite build && pnpm smoke:main",
+    "build:force": "electron-vite build",
+    "prepack": "pnpm build",
+    "bump-version": "pnpm version --no-commit-hooks --no-git-tag-version",
+    "pack:dev": "pnpm bump-version prerelease && pnpm build && pnpm clean:tgz && pnpm pack && pnpm dlx shx@0.4.0 ls \"$PWD/*.tgz\"",
+    "clean": "pnpm clean:out",
+    "clean:node_modules": "pnpm dlx shx@0.4.0 rm -rf node_modules",
+    "clean:out": "pnpm dlx shx@0.4.0 rm -rf out",
+    "clean:tgz": "pnpm dlx shx@0.4.0 rm -f \"*.tgz\"",
+    "clean:all": "pnpm \"/^clean:(node_modules|out|tgz)\\$/\""
+  },
+  "devDependencies": {
+    "@electron-toolkit/tsconfig": "^2.0.0",
+    "@freelensapp/core": "1.10.3",
+    "@freelensapp/extensions": "^1.10.3",
+    "@types/node": "~24.12.4",
+    "@types/react": "^17.0.93",
+    "@vitejs/plugin-react": "^6.1.1",
+    "electron-vite": "^5.0.0",
+    "mobx": "6.13.7",
+    "mobx-react": "7.6.0",
+    "react": "17.0.2",
+    "react-dom": "17.0.2",
+    "typescript": "7.0.2",
+    "vite": "^8.3.1",
+    "vitest": "^5.0.2"
+  },
+  "keywords": [
+    "extension",
+    "freelensapp",
+    "lens",
+    "openlens",
+    "freelens",
+    "gpu",
+    "nvidia",
+    "dcgm",
+    "kubernetes",
+    "monitoring"
+  ],
+  "packageManager": "pnpm@12.6.0"
+}

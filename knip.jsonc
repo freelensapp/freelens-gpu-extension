@@ -1,0 +1,27 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema-jsonc.json",
+
+  "entry": ["src/main/index.ts", "src/renderer/index.tsx"],
+  "project": ["*.{js,mjs,ts}", "src/**/*.{ts,tsx}"],
+
+  "ignoreBinaries": ["yq"],
+  "ignoreDependencies": [
+    // Only referenced from tsconfig.json "paths": it pins the Freelens core typings that
+    // moduleResolution=bundler cannot find through the package's exports map.
+    "@freelensapp/core",
+    // Build-only plugins; Knip does not execute the Electron Vite config.
+    "@vitejs/plugin-react",
+    // Provided by the Freelens host at runtime (mapped to globals in build/global-externals.js);
+    // kept as a devDependency so the react peer range resolves.
+    "react-dom"
+  ],
+
+  // The electron-vite plugin (Knip 6.35+) executes electron.vite.config.js and trips on the
+  // ESM-only @vitejs/plugin-react; the build-only plugins stay in ignoreDependencies instead.
+  "electron-vite": false,
+
+  "typescript": {
+    "config": ["tsconfig.json"]
+  },
+  "exclude": ["exports"]
+}

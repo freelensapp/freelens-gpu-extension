@@ -1,0 +1,20 @@
+{
+  "extends": "@electron-toolkit/tsconfig/tsconfig.node.json",
+  "include": ["*.ts", "src/**/*"],
+  "exclude": ["src/**/__tests__/**"],
+  "compilerOptions": {
+    "composite": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "jsx": "react-jsx",
+    "experimentalDecorators": true,
+    "types": ["node", "vite/client", "electron-vite/node"],
+    "paths": {
+      "@vitejs/plugin-react": ["./node_modules/@vitejs/plugin-react/dist/index.d.ts"],
+      // @freelensapp/core's exports map has no types; moduleResolution=bundler (TypeScript 7 removed node10)
+      // would resolve the Freelens API to `any` without these.
+      "@freelensapp/core/main": ["./node_modules/@freelensapp/core/static/build/library/src/main/library.d.ts"],
+      "@freelensapp/core/renderer": ["./node_modules/@freelensapp/core/static/build/library/src/renderer/library.d.ts"]
+    }
+  }
+}

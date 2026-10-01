@@ -1,0 +1,9 @@
+/node_modules/
+/out/
+/dist/
+*.tgz
+*.map
+*.log
+.DS_Store
+/.idea
+/.vscode
