@@ -10,9 +10,10 @@ pnpm type:check && pnpm lint:check && pnpm knip:check && pnpm test:unit
 pnpm pack            # prepack builds; writes the .tgz to install in Freelens (Extensions → path to .tgz)
 ```
 
-Try it without a GPU: on any cluster (kind works) run a pod named like `*dcgm-exporter*` that serves one of the
-fixture files from `src/renderer/gpu/__tests__/fixtures/` at `/metrics` (nginx + ConfigMap). Discovery and every
-view behave exactly as with the real DaemonSet.
+Try it without a GPU: on any kind cluster run `integration/fixtures/gpu/up.sh` and `integration/fixtures/gpu/wait.sh`
+(fake capacity on the nodes, busybox exporters serving the fixture files of `src/renderer/gpu/__tests__/fixtures/`),
+then install the packed extension. Discovery and every view behave exactly as with the real DaemonSet. Any pod named
+like `*dcgm-exporter*` that serves one of those files at `/metrics` works too.
 
 ## Ground rules
 
@@ -29,11 +30,26 @@ view behave exactly as with the real DaemonSet.
 
 ## Pull requests
 
-1. Branch from `main`; keep PRs focused.
-2. `pnpm biome:fix` before committing; CI runs type-check, lint, knip, unit tests, Trunk and OSV.
+1. Branch from `main`; keep PRs focused. Plain, descriptive PR titles and commit messages, no
+   Conventional Commits prefixes.
+2. `pnpm biome:fix` and `pnpm trunk:fix` before committing; CI runs type check, lint (biome and
+   trunk), knip, unit tests, the Playwright integration tests inside a packaged Freelens on kind
+   with the fake GPU fixture, and the OSV scanner.
 3. Add a line to `CHANGELOG.md`.
 4. For UI changes attach a screenshot from Freelens.
 
 ## Releasing
 
-See [docs/publishing.md](docs/publishing.md).
+Releases follow the freelensapp organization process, shared by every extension:
+
+1. A maintainer runs the **Automated npm version** workflow (`npm-version.yaml`) choosing
+   `patch`, `minor` or `major`. It opens a pull request that bumps `version` in `package.json`.
+2. The pull request is reviewed and merged.
+3. A maintainer comments `/tag` on the merged pull request: the **Automated tag** workflow
+   (`tag.yaml`) creates and pushes the `vX.Y.Z` tag.
+4. The **Release** workflow (`release.yaml`) builds the extension, publishes
+   `@freelensapp/gpu-extension` to npm (Trusted Publishing with provenance, with
+   `NPM_TOKEN` as fallback) and attaches the `.tgz`, its checksum and the SBOM to a GitHub
+   Release.
+
+Do not push tags by hand and do not publish from a workstation.
