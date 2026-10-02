@@ -13,12 +13,21 @@ import type { ProbeResult } from "../gpu/scraper";
 import type { ExporterScrape } from "../gpu/types";
 
 const EXPORTER_COLUMNS: Column<ExporterScrape>[] = [
-  { key: "ns", title: "Namespace", width: 150, min: 60, value: (e) => e.namespace, groupOf: (e) => e.namespace },
+  {
+    key: "ns",
+    title: "Namespace",
+    width: 150,
+    flex: 110,
+    min: 60,
+    value: (e) => e.namespace,
+    groupOf: (e) => e.namespace,
+  },
   {
     key: "name",
     link: (e) => (e.via === "prometheus" ? serviceLink(e.namespace, e.name) : podLink(e.namespace, e.name)),
     title: "Pod",
     width: 320,
+    flex: 160,
     min: 80,
     value: (e) => e.name,
   },
@@ -41,6 +50,7 @@ const EXPORTER_COLUMNS: Column<ExporterScrape>[] = [
     link: (e) => (e.via === "prometheus" || e.nodeName.includes(",") ? undefined : nodeLink(e.nodeName)),
     title: "Node",
     width: 220,
+    flex: 140,
     min: 80,
     value: (e) => e.nodeName,
     className: "gpuext-dim",
@@ -64,13 +74,29 @@ const EXPORTER_COLUMNS: Column<ExporterScrape>[] = [
     value: (e) => e.bytes ?? -1,
     render: (e) => (e.bytes === undefined ? "–" : `${(e.bytes / 1024).toFixed(0)} KiB`),
   },
-  { key: "error", title: "Error", width: 360, min: 80, value: (e) => e.error ?? "", className: "gpuext-error-text" },
+  {
+    key: "error",
+    title: "Error",
+    width: 360,
+    flex: 180,
+    min: 80,
+    value: (e) => e.error ?? "",
+    className: "gpuext-error-text",
+  },
 ];
 
 const PROBE_COLUMNS: Column<ProbeResult>[] = [
-  { key: "target", title: "Candidate (ns/pod:port)", width: 420, min: 100, value: (p) => p.target },
+  { key: "target", title: "Candidate (ns/pod:port)", width: 420, flex: 220, min: 100, value: (p) => p.target },
   { key: "outcome", title: "Outcome", width: 120, min: 60, value: (p) => p.outcome, groupOf: (p) => p.outcome },
-  { key: "detail", title: "Detail", width: 600, min: 100, value: (p) => p.detail ?? "", className: "gpuext-dim" },
+  {
+    key: "detail",
+    title: "Detail",
+    width: 600,
+    flex: 220,
+    min: 100,
+    value: (p) => p.detail ?? "",
+    className: "gpuext-dim",
+  },
 ];
 
 const { Button, Input } = R.Component;

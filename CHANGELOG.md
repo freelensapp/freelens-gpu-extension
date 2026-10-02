@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Fix: the tables were wider than the page in a 1440 px window, so Health and Power were out of sight. Text columns
+  (pod, node, namespace, model, names, messages) now share the free width and shrink down to their minimum with an
+  ellipsis while staying readable, and Health and Power come right after the identity columns on the GPUs and
+  Allocation views and before the VRAM columns in the Pods table and drawers. Column widths resized by hand are stored under a new key, since some
+  views changed order (#10).
+
 ## 0.8.0
 
 - Moved to the freelensapp organization as `@freelensapp/gpu-extension`: the organization workflows (release with

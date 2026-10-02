@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 // data-grid links cells to Freelens' details panel; the host API does not exist outside Freelens.
 vi.mock("@freelensapp/extensions", () => ({ Renderer: { Navigation: { showDetails() {} } } }));
 
-const { activeGrouper } = await import("../data-grid");
+const { activeGrouper, gridTemplate } = await import("../data-grid");
 
 import type { Column } from "../data-grid";
 
@@ -47,5 +47,26 @@ describe("activeGrouper", () => {
     const cols = columns.map((c) => (c.key === "gpu" ? { ...c, groupOf: undefined } : c));
     expect(activeGrouper(cols, { key: "gpu", dir: "asc" }, defaultSort, byCard)).toBe(byCard);
     expect(activeGrouper(cols, { key: "pod", dir: "asc" }, defaultSort, byCard)).toBeUndefined();
+  });
+});
+
+describe("gridTemplate", () => {
+  const cols: Column<Row>[] = [
+    { key: "pod", title: "Pod", width: 360, min: 80, flex: 160, value: (r) => r.pod },
+    { key: "gpu", title: "GPU", width: 90, value: (r) => r.gpu },
+    { key: "pct", title: "GPU %", width: 230, min: 90, num: true, value: (r) => r.pct },
+  ];
+
+  it("lets flex columns share the free width down to their floor, and keeps the others fixed", () => {
+    expect(gridTemplate(cols, [360, 90, 230])).toBe("minmax(160px, 360fr) 90px 230px");
+  });
+
+  it("fixes a flex column once it is resized by hand", () => {
+    expect(gridTemplate(cols, [200, 90, 300])).toBe("200px 90px 300px");
+  });
+
+  it("falls back to the default width, and never floors above it", () => {
+    const wide: Column<Row>[] = [{ key: "pod", title: "Pod", width: 120, flex: 200, value: (r) => r.pod }];
+    expect(gridTemplate(wide, [])).toBe("minmax(120px, 120fr)");
   });
 });
