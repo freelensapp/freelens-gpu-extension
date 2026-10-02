@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.1
 
 - Fix: the tables were wider than the page in a 1440 px window, so Health and Power were out of sight. Text columns
   (pod, node, namespace, model, names, messages) now share the free width and shrink down to their minimum with an
