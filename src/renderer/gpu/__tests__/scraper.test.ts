@@ -325,3 +325,37 @@ describe("inference probe caching", () => {
     }
   });
 });
+
+describe("GpuScraper after every exporter scrape failed", () => {
+  it("discovers again at the next tick instead of scraping the same dead pods", async () => {
+    const dcgm = readFileSync(join(__dirname, "fixtures", "dcgm_pod_labels.prom"), "utf8");
+    const exporter = pod({
+      ns: "gpu-operator",
+      name: "nvidia-dcgm-exporter-a",
+      phase: "Running",
+      node: "n1",
+      ports: [9400],
+    });
+    let alive = true;
+    let lists = 0;
+    const s = new GpuScraper({
+      clusterId: () => "c1",
+      listPods: async () => {
+        lists++;
+        return (alive ? [exporter] : []) as never;
+      },
+      listServices: async () => [],
+      fetchText: async () => {
+        if (!alive) throw new Error("HTTP 404 Not Found");
+        return dcgm;
+      },
+    });
+    await s.snapshot();
+    expect(lists).toBe(1);
+
+    alive = false; // the exporter pod is deleted
+    await expect(s.snapshot()).rejects.toThrow(/All 1 exporter scrapes failed/);
+    await expect(s.snapshot()).rejects.toThrow(/No GPU metrics exporter found/);
+    expect(lists).toBe(2);
+  });
+});
