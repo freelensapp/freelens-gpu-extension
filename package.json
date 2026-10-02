@@ -1,6 +1,6 @@
 {
   "name": "@freelensapp/gpu-extension",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Freelens extension for GPUs — per-pod and per-device GPU utilisation, VRAM and power from dcgm-exporter or a per-process exporter, zero cluster footprint",
   "homepage": "https://github.com/freelensapp/freelens-gpu-extension",
   "repository": {
