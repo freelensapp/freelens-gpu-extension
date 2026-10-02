@@ -272,12 +272,20 @@ describe("inference probe caching", () => {
         return vllmText;
       },
     });
-    await expect(s.snapshot()).rejects.toThrow();
-    expect(calls).toEqual([]);
-    expect(s.inferenceTargets).toEqual([]);
-    status.containerStatuses = [{ ready: true }];
-    await expect(s.snapshot()).rejects.toThrow();
-    expect(s.inferenceTargets.map((t) => t.pod)).toEqual(["vllm-0"]);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-09-26T10:00:00Z"));
+      await expect(s.snapshot()).rejects.toThrow();
+      expect(calls).toEqual([]);
+      expect(s.inferenceTargets).toEqual([]);
+      status.containerStatuses = [{ ready: true }];
+      // Found at the next discovery pass (60 s on any cluster, also one without a GPU exporter).
+      vi.setSystemTime(new Date("2026-09-26T10:01:01Z"));
+      await expect(s.snapshot()).rejects.toThrow();
+      expect(s.inferenceTargets.map((t) => t.pod)).toEqual(["vllm-0"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("retries a failed probe after a short wait but remembers a 404 for long", async () => {
@@ -357,5 +365,92 @@ describe("GpuScraper after every exporter scrape failed", () => {
     await expect(s.snapshot()).rejects.toThrow(/All 1 exporter scrapes failed/);
     await expect(s.snapshot()).rejects.toThrow(/No GPU metrics exporter found/);
     expect(lists).toBe(2);
+  });
+});
+
+describe("GpuScraper discovery keywords", () => {
+  it("does not take the node name in a static pod's name for a GPU keyword", async () => {
+    const node = "gpu-demo-control-plane";
+    const pods = [
+      // Static pods of the control plane carry the node name: none of them is a candidate.
+      pod({ ns: "kube-system", name: `kube-apiserver-${node}`, phase: "Running", node, ports: [6443] }),
+      pod({ ns: "kube-system", name: `etcd-${node}`, phase: "Running", node, ports: [2381] }),
+      pod({ ns: "kube-system", name: `kube-scheduler-${node}`, phase: "Running", node, ports: [10259] }),
+      // An exporter on the same node is still found by its own name.
+      pod({ ns: "gpu-operator", name: "nvidia-dcgm-exporter-x1", phase: "Running", node, ports: [9400] }),
+      // A static pod that is itself GPU-related keeps the keyword outside the node name.
+      pod({ ns: "kube-system", name: `dcgm-exporter-${node}`, phase: "Running", node, ports: [9400] }),
+    ];
+    const s = new GpuScraper({
+      clusterId: () => "c1",
+      listPods: async () => pods as never,
+      listServices: async () => [],
+      fetchText: async () => "",
+    });
+    await expect(s.snapshot()).rejects.toThrow(/No GPU metrics exporter found/);
+    expect(s.lastProbes.map((p) => p.target).sort()).toEqual([
+      "gpu-operator/nvidia-dcgm-exporter-x1:9400",
+      `kube-system/dcgm-exporter-${node}:9400`,
+    ]);
+  });
+});
+
+describe("GpuScraper discovery cache without exporters", () => {
+  const counting = () => {
+    const calls = { pods: 0, services: 0, fetches: 0 };
+    const s = new GpuScraper({
+      clusterId: () => "c1",
+      listPods: async () => {
+        calls.pods++;
+        return [pod({ ns: "web", name: "cpu", phase: "Running", node: "n1" })] as never;
+      },
+      listServices: async () => {
+        calls.services++;
+        return [{ namespace: "monitoring", name: "prometheus-server", ports: [{ name: "http", port: 80 }] }];
+      },
+      fetchText: async () => {
+        calls.fetches++;
+        return '{"status":"success","data":{"resultType":"vector","result":[]}}';
+      },
+    });
+    return { s, calls };
+  };
+
+  it("lists pods and services once per TTL, not on every refresh, and keeps the same probes", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-10-02T10:00:00Z"));
+      const { s, calls } = counting();
+      await expect(s.snapshot()).rejects.toThrow(/No GPU metrics exporter found/);
+      expect(calls).toEqual({ pods: 1, services: 1, fetches: 1 });
+      const probes = s.lastProbes;
+      expect(probes).toHaveLength(1);
+
+      // Two more 20 s ticks inside the TTL: nothing is listed or probed again, and the probes do not pile up.
+      for (const t of ["10:00:20", "10:00:40"]) {
+        vi.setSystemTime(new Date(`2026-10-02T${t}Z`));
+        await expect(s.snapshot()).rejects.toThrow(/No GPU metrics exporter found/);
+      }
+      expect(calls).toEqual({ pods: 1, services: 1, fetches: 1 });
+      expect(s.lastProbes).toEqual(probes);
+
+      // After the TTL the search runs again.
+      vi.setSystemTime(new Date("2026-10-02T10:01:01Z"));
+      await expect(s.snapshot()).rejects.toThrow(/No GPU metrics exporter found/);
+      expect(calls).toEqual({ pods: 2, services: 2, fetches: 2 });
+      expect(s.lastProbes).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("searches again at once on a forced refresh (the Refresh button) or after invalidate (a new pin)", async () => {
+    const { s, calls } = counting();
+    await expect(s.snapshot()).rejects.toThrow();
+    await expect(s.snapshot(true)).rejects.toThrow();
+    expect(calls).toMatchObject({ pods: 2, services: 2 });
+    s.invalidate();
+    await expect(s.snapshot()).rejects.toThrow();
+    expect(calls).toMatchObject({ pods: 3, services: 3 });
   });
 });

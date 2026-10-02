@@ -44,16 +44,22 @@ type Pod = Renderer.K8sApi.Pod;
 const GPU_KEYWORDS = ["dcgm", "gpu", "nvidia", "cuda"];
 const PROBE_TIMEOUT_MS = 5_000;
 const SCRAPE_TIMEOUT_MS = 15_000;
-const DISCOVERY_TTL_MS = 60_000;
+/** Discovery (pod list, probes) and the Prometheus search are reused this long, also when they found nothing. */
+export const DISCOVERY_TTL_MS = 60_000;
 
 function metricsPath(ns: string, name: string, port: number): string {
   return `/api/v1/namespaces/${ns}/pods/${name}:${port}/proxy/metrics`;
 }
 
-/** Name, images and labels of a pod, lower-cased, for keyword matching. */
+/**
+ * Name, images and labels of a pod, lower-cased, for keyword matching. The node name is taken out of the pod name:
+ * static pods are named after their node (kube-apiserver-<node>), and GPU node pools often have "gpu" in the node name,
+ * which would make every control plane pod a candidate.
+ */
 function podHaystack(pod: Pod): string {
+  const node = pod.getNodeName();
   return [
-    pod.getName(),
+    node ? pod.getName().replaceAll(node, "") : pod.getName(),
     ...pod.getContainers().map((c) => c.image ?? ""),
     ...Object.entries(pod.metadata.labels ?? {}).flatMap(([k, v]) => [k, v]),
   ]
@@ -100,13 +106,7 @@ function containersReady(pod: Pod): boolean {
 }
 
 function looksGpuRelated(pod: Pod): boolean {
-  const hay = [
-    pod.getName(),
-    ...pod.getContainers().map((c) => c.image ?? ""),
-    ...Object.entries(pod.metadata.labels ?? {}).flatMap(([k, v]) => [k, v]),
-  ]
-    .join(" ")
-    .toLowerCase();
+  const hay = podHaystack(pod);
   return GPU_KEYWORDS.some((k) => hay.includes(k));
 }
 
@@ -234,8 +234,9 @@ export class GpuScraper {
   private gpuPodsByNode = new Map<string, string[]>();
   /** Pod-derived state from the last successful pod list (undefined until one succeeds). */
   podState: PodState | undefined = undefined;
-  /** Outcome of the last discovery pass, for diagnostics in the UI and logs. */
-  lastProbes: ProbeResult[] = [];
+  /** Probes of the last discovery pass and of the last Prometheus search; see lastProbes. */
+  private discoveryProbes: ProbeResult[] = [];
+  private promProbes: ProbeResult[] = [];
   lastCandidateCount = 0;
   lastPodCount = 0;
 
@@ -245,6 +246,8 @@ export class GpuScraper {
   pins: Target[] = [];
   /** Prometheus query API chosen by the last fallback, reused until discovery runs again. */
   private prom: PromTarget | undefined;
+  /** When the last Prometheus search found nothing; services are not listed again within DISCOVERY_TTL_MS. */
+  private promMissAt = 0;
   /** Inference servers found by the last discovery. */
   inferenceTargets: InferenceTarget[] = [];
   /** Pods probed and found not to be inference servers ("ns/pod" -> retry after), so GPU pods are not re-probed every tick. */
@@ -253,6 +256,12 @@ export class GpuScraper {
   invalidate() {
     this.discoveredAt = 0;
     this.prom = undefined;
+    this.promMissAt = 0;
+  }
+
+  /** Outcome of the last discovery pass and Prometheus search, for diagnostics in the UI and logs. */
+  get lastProbes(): ProbeResult[] {
+    return [...this.discoveryProbes, ...this.promProbes];
   }
 
   get exporters(): ExporterPod[] {
@@ -260,7 +269,8 @@ export class GpuScraper {
   }
 
   async discover(force = false): Promise<ExporterPod[]> {
-    if (!force && Date.now() - this.discoveredAt < DISCOVERY_TTL_MS && this.discovered.length > 0) {
+    // An empty result is cached too: on a cluster without GPUs every tick would list all the pods again.
+    if (!force && Date.now() - this.discoveredAt < DISCOVERY_TTL_MS) {
       return this.discovered;
     }
     const clusterId = this.deps.clusterId();
@@ -343,7 +353,7 @@ export class GpuScraper {
       }),
     );
     await inferenceProbe;
-    this.lastProbes = probes;
+    this.discoveryProbes = probes;
     this.discovered = probed.filter((x): x is ExporterPod => !!x);
     this.discoveredAt = Date.now();
     log.info(
@@ -413,7 +423,10 @@ export class GpuScraper {
   }
 
   async snapshot(force = false): Promise<Snapshot> {
-    if (force) this.prom = undefined;
+    if (force) {
+      this.prom = undefined;
+      this.promMissAt = 0;
+    }
     const exporters = await this.discover(force);
     const clusterId = this.deps.clusterId();
     if (!clusterId) throw new Error("no active cluster");
@@ -475,11 +488,14 @@ export class GpuScraper {
     const probe = selectorFor(["DCGM_FI_DEV_FB_USED", "gpu_process_memory_bytes"]);
     let target = this.prom;
     if (!target) {
+      // Nothing found a moment ago: keep that answer (and its probes) instead of listing every service again.
+      if (Date.now() - this.promMissAt < DISCOVERY_TTL_MS) return undefined;
+      this.promProbes = [];
       let services: ServiceLike[] = [];
       try {
         services = await this.deps.listServices();
       } catch (e) {
-        this.lastProbes.push({ target: "services", outcome: "error", detail: `list services: ${describe(e)}` });
+        this.promProbes.push({ target: "services", outcome: "error", detail: `list services: ${describe(e)}` });
       }
       const pinned: PromTarget[] = this.pins.flatMap((t) =>
         t.kind === "service" ? [{ namespace: t.namespace, name: t.name, port: t.port }] : [],
@@ -495,20 +511,23 @@ export class GpuScraper {
             await this.deps.fetchText(clusterId, promQueryPath(t, `count(${probe})`), PROBE_TIMEOUT_MS),
           );
           if (n > 0) {
-            this.lastProbes.push({ target: label, outcome: "prometheus" });
+            this.promProbes.push({ target: label, outcome: "prometheus" });
             target = t;
             break;
           }
-          this.lastProbes.push({
+          this.promProbes.push({
             target: label,
             outcome: "unrecognised",
             detail: "query API answers but has no GPU series",
           });
         } catch (e) {
-          this.lastProbes.push({ target: label, outcome: "error", detail: describe(e) });
+          this.promProbes.push({ target: label, outcome: "error", detail: describe(e) });
         }
       }
-      if (!target) return undefined;
+      if (!target) {
+        this.promMissAt = Date.now();
+        return undefined;
+      }
       this.prom = target;
     }
     const t0 = performance.now();
@@ -524,11 +543,13 @@ export class GpuScraper {
     } catch (e) {
       // Forget it so the next tick probes again (it may be restarting, or another candidate may work).
       this.prom = undefined;
-      this.lastProbes.push({
-        target: `prometheus ${target.namespace}/svc/${target.name}:${target.port}`,
-        outcome: "error",
-        detail: `query failed: ${describe(e)}`,
-      });
+      this.promProbes = [
+        {
+          target: `prometheus ${target.namespace}/svc/${target.name}:${target.port}`,
+          outcome: "error",
+          detail: `query failed: ${describe(e)}`,
+        },
+      ];
       return undefined;
     }
     const latencyMs = Math.round(performance.now() - t0);
