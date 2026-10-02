@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Fix: on a cluster without exporters the whole cluster was listed again every 20 s (pods, services, nodes), also
+  when only a Pod or Node drawer was open. An empty discovery and a failed Prometheus search are now cached for 60 s
+  like a successful one, nodes are listed with the discovery instead of with every scrape, and the drawers poll only
+  for a pod that can use a GPU (or on a cluster known to have GPUs) and for a node that advertises one (#8).
+
 ## 0.8.0
 
 - Moved to the freelensapp organization as `@freelensapp/gpu-extension`: the organization workflows (release with
