@@ -17,6 +17,7 @@ const IDLE_COLUMNS: Column<IdleRow>[] = [
     link: (r) => namespaceLink(r.namespace),
     title: "Namespace",
     width: 130,
+    flex: 100,
     min: 60,
     value: (r) => r.namespace,
     groupOf: (r) => r.namespace,
@@ -26,6 +27,7 @@ const IDLE_COLUMNS: Column<IdleRow>[] = [
     link: (r) => podLink(r.namespace, r.pod),
     title: "Pod",
     width: 360,
+    flex: 160,
     min: 80,
     value: (r) => r.pod,
     render: (r) => {
@@ -52,6 +54,7 @@ const IDLE_COLUMNS: Column<IdleRow>[] = [
     link: (r) => nodeLink(r.node),
     title: "Node",
     width: 200,
+    flex: 140,
     min: 60,
     value: (r) => r.node,
     className: "gpuext-dim",

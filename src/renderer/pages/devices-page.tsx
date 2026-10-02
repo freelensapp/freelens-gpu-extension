@@ -25,6 +25,7 @@ export const DEVICE_COLUMNS: Column<GpuDevice>[] = [
     link: (d) => nodeLink(d.node),
     title: "Node",
     width: 220,
+    flex: 150,
     min: 80,
     value: (d) => d.node,
     groupOf: (d) => d.node,
@@ -42,6 +43,7 @@ export const DEVICE_COLUMNS: Column<GpuDevice>[] = [
     key: "model",
     title: "Model",
     width: 200,
+    flex: 150,
     min: 80,
     value: (d) => d.model ?? "",
     className: "gpuext-dim",
@@ -55,6 +57,38 @@ export const DEVICE_COLUMNS: Column<GpuDevice>[] = [
     value: (d) => d.migProfile ?? "",
     className: "gpuext-mono",
     groupOf: (d) => d.migProfile ?? "",
+  },
+  {
+    key: "health",
+    title: "Health",
+    width: 150,
+    min: 70,
+    value: (d) => ({ bad: 0, warn: 1, unknown: 2, ok: 3 })[deviceHealth(d).level],
+    render: (d) => {
+      const h = deviceHealth(d);
+      const cls = { bad: "gpuext-hot", warn: "gpuext-warn", ok: "gpuext-ok", unknown: "gpuext-dim" }[h.level];
+      return <span className={cls}>{h.text}</span>;
+    },
+    title_: (d) => {
+      const h = deviceHealth(d);
+      return h.level === "unknown"
+        ? "dcgm-exporter reports no health gauges for this device (MIG slices never carry them; XID/ECC may be missing from the counters CSV)"
+        : `DCGM_FI_DEV_XID_ERRORS / ECC_DBE_VOL_TOTAL / ROW_REMAP_FAILURE / UNCORRECTABLE_REMAPPED_ROWS: ${h.text}`;
+    },
+    groupOf: (d) => deviceHealth(d).level,
+  },
+  {
+    key: "power",
+    title: "Power",
+    width: 80,
+    min: 50,
+    num: true,
+    value: (d) => d.powerWatts,
+    render: (d) => `${d.powerWatts.toFixed(0)} W`,
+    title_: (d) =>
+      d.migProfile
+        ? `${d.powerWatts.toFixed(0)} W is the whole card's draw (DCGM reports it on every slice); pods and namespaces are charged a share by slice size`
+        : `${d.powerWatts.toFixed(0)} W`,
   },
   {
     key: "util",
@@ -98,16 +132,6 @@ export const DEVICE_COLUMNS: Column<GpuDevice>[] = [
     render: (d) => fmtMiB(d.vramUsedMiB),
   },
   {
-    key: "vramTotal",
-    title: "VRAM total",
-    width: 100,
-    min: 60,
-    num: true,
-    value: (d) => d.vramTotalMiB,
-    render: (d) => fmtMiB(d.vramTotalMiB),
-    className: "gpuext-dim",
-  },
-  {
     key: "vramPct",
     title: "VRAM %",
     width: 80,
@@ -117,17 +141,14 @@ export const DEVICE_COLUMNS: Column<GpuDevice>[] = [
     render: (d) => (d.vramTotalMiB > 0 ? `${((100 * d.vramUsedMiB) / d.vramTotalMiB).toFixed(0)}%` : "–"),
   },
   {
-    key: "power",
-    title: "Power",
-    width: 80,
-    min: 50,
+    key: "vramTotal",
+    title: "VRAM total",
+    width: 100,
+    min: 60,
     num: true,
-    value: (d) => d.powerWatts,
-    render: (d) => `${d.powerWatts.toFixed(0)} W`,
-    title_: (d) =>
-      d.migProfile
-        ? `${d.powerWatts.toFixed(0)} W is the whole card's draw (DCGM reports it on every slice); pods and namespaces are charged a share by slice size`
-        : `${d.powerWatts.toFixed(0)} W`,
+    value: (d) => d.vramTotalMiB,
+    render: (d) => fmtMiB(d.vramTotalMiB),
+    className: "gpuext-dim",
   },
   {
     key: "temp",
@@ -139,25 +160,6 @@ export const DEVICE_COLUMNS: Column<GpuDevice>[] = [
     render: (d) => (
       <span className={tempClass(d.tempC)}>{d.tempC === undefined ? "–" : `${d.tempC.toFixed(0)} °C`}</span>
     ),
-  },
-  {
-    key: "health",
-    title: "Health",
-    width: 150,
-    min: 70,
-    value: (d) => ({ bad: 0, warn: 1, unknown: 2, ok: 3 })[deviceHealth(d).level],
-    render: (d) => {
-      const h = deviceHealth(d);
-      const cls = { bad: "gpuext-hot", warn: "gpuext-warn", ok: "gpuext-ok", unknown: "gpuext-dim" }[h.level];
-      return <span className={cls}>{h.text}</span>;
-    },
-    title_: (d) => {
-      const h = deviceHealth(d);
-      return h.level === "unknown"
-        ? "dcgm-exporter reports no health gauges for this device (MIG slices never carry them; XID/ECC may be missing from the counters CSV)"
-        : `DCGM_FI_DEV_XID_ERRORS / ECC_DBE_VOL_TOTAL / ROW_REMAP_FAILURE / UNCORRECTABLE_REMAPPED_ROWS: ${h.text}`;
-    },
-    groupOf: (d) => deviceHealth(d).level,
   },
   {
     key: "pods",
@@ -173,6 +175,7 @@ export const DEVICE_COLUMNS: Column<GpuDevice>[] = [
     link: (d) => (d.pods.length === 1 ? podRefLink(d.pods[0]) : undefined),
     title: "Pod names",
     width: 360,
+    flex: 140,
     min: 100,
     value: (d) => d.pods.join(", "),
     className: "gpuext-dim",

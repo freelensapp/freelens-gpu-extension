@@ -5,7 +5,9 @@ import { openDetails } from "./links";
  * Generic sortable / resizable grid rendered as CSS grid (the host app's
  * table CSS misaligns real <table>s). Column widths persist per `id` in
  * localStorage; headers sort on click; the handle at each header's right
- * edge resizes (double-click resets).
+ * edge resizes (double-click resets). Text columns marked `flex` share the
+ * free width and shrink down to their `flex` floor (ellipsis), so the numbers stay in
+ * sight in a narrow window; resizing one by hand fixes its width.
  */
 
 export interface Column<T> {
@@ -13,6 +15,12 @@ export interface Column<T> {
   title: string;
   width: number;
   min?: number;
+  /**
+   * Free text (names, messages): while not resized by hand the column takes a share of the free width in proportion
+   * to `width`, and shrinks down to this many px (kept readable, unlike `min`, the floor for resizing by hand) before
+   * the grid scrolls horizontally.
+   */
+  flex?: number;
   /** Right-align (numbers). */
   num?: boolean;
   value: (row: T) => string | number;
@@ -73,8 +81,19 @@ export function activeGrouper<T>(
   return undefined;
 }
 
+// v2: widths are stored by position, and 0.8.1 reordered the columns of some views.
 function storageKey(id: string) {
-  return `freelens-gpu-extension.colwidths.${id}`;
+  return `freelens-gpu-extension.colwidths.v2.${id}`;
+}
+
+/** CSS grid tracks: a flex column keeps its proportional share until it is resized by hand (width != default). */
+export function gridTemplate<T>(columns: Column<T>[], widths: number[]): string {
+  return columns
+    .map((c, i) => {
+      const w = widths[i] ?? c.width;
+      return c.flex !== undefined && w === c.width ? `minmax(${Math.min(c.flex, w)}px, ${w}fr)` : `${w}px`;
+    })
+    .join(" ");
 }
 
 function loadWidths<T>(id: string, cols: Column<T>[]): number[] {
@@ -110,7 +129,11 @@ export function DataGrid<T>({ id, columns, rows, rowKey, defaultSort, groupOf, e
   const onHandleDown = (idx: number) => (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    drag.current = { idx, startX: e.clientX, startW: widths[idx] };
+    // A flex column is rendered at its share of the free width, not at widths[idx]: start from what is on screen.
+    const header = (e.currentTarget as HTMLElement).parentElement;
+    const startW =
+      columns[idx].flex !== undefined && header ? Math.round(header.getBoundingClientRect().width) : widths[idx];
+    drag.current = { idx, startX: e.clientX, startW };
     const onMove = (ev: MouseEvent) => {
       const d = drag.current;
       if (!d) return;
@@ -156,13 +179,19 @@ export function DataGrid<T>({ id, columns, rows, rowKey, defaultSort, groupOf, e
   }, [rows, columns, sort]);
 
   const grouper = activeGrouper(columns, sort, defaultSort, groupOf);
-  const template = widths.map((w) => `${w}px`).join(" ");
+  const template = gridTemplate(columns, widths);
+  // With a flex column the grid fills the page (instead of max-content) so the fr tracks have a width to share.
+  const fill = columns.some((c) => c.flex !== undefined);
 
   if (rows.length === 0 && emptyText) return <div className="gpuext-empty">{emptyText}</div>;
 
   let prevGroup = "";
   return (
-    <div className="gpuext-grid" role="table" style={{ gridTemplateColumns: template }}>
+    <div
+      className="gpuext-grid"
+      role="table"
+      style={fill ? { gridTemplateColumns: template, width: "100%" } : { gridTemplateColumns: template }}
+    >
       <div className="gpuext-row gpuext-head" role="row">
         {columns.map((c, i) => (
           <div

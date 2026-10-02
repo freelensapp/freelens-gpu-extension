@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fix: the tables were wider than the page in a 1440 px window, so Health and Power were out of sight. Text columns
+  (pod, node, namespace, model, names, messages) now share the free width and shrink down to their minimum with an
+  ellipsis while staying readable, and Health and Power come right after the identity columns on the GPUs and
+  Allocation views and before the VRAM columns in the Pods table and drawers. Column widths resized by hand are stored under a new key, since some
+  views changed order (#10).
 - Fix: when a scrape failed, the rows of the last good one stayed on the page under the error with the status still
   counting the exporters, and nothing said they were old. The status now reads "stale: last good scrape HH:MM:SS",
   the pages built on the scrape (Pods, GPUs, Idle & waste, Allocation) and the drawer tables are dimmed, and the
