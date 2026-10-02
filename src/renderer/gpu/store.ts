@@ -22,7 +22,7 @@ import {
 import { type InferenceLevel, inferenceStatus, type VllmRates, type VllmSample, vllmRates } from "./inference";
 import { aggregateNamespaces, migFree, type NamespaceRow } from "./namespaces";
 import { explainPending, type NodeGpuResources, type PendingGpuPod } from "./pending";
-import { GpuScraper, type InferenceScrape, type ProbeResult } from "./scraper";
+import { DISCOVERY_TTL_MS, GpuScraper, type InferenceScrape, type ProbeResult } from "./scraper";
 import { formatTarget, isTarget, parseTarget, type Target } from "./targets";
 
 import type { ReportInput } from "./report";
@@ -70,6 +70,8 @@ export class GpuStore {
   @observable loading = false;
   @observable.ref nodes: NodeInfo[] = [];
   @observable nodesError: string | undefined = undefined;
+  /** When the node list was last requested; nodes change rarely, so they follow the discovery cadence. */
+  private nodesLoadedAt = 0;
   /** Rolling per-pod history, keyed "ns/pod". Bumped via historyVersion for observers. */
   readonly history = new Map<string, HistoryPoint[]>();
   @observable historyVersion = 0;
@@ -98,6 +100,14 @@ export class GpuStore {
 
   @computed get devices(): GpuDevice[] {
     return this.snapshot ? sortDevices(this.snapshot.gpus) : [];
+  }
+
+  /**
+   * The cluster is known to have GPUs: an exporter answered, or a node advertises a GPU resource. The Pod drawer
+   * polls for any pod only then, so opening pods on a cluster without GPUs does not start the scrape loop.
+   */
+  @computed get hasGpus(): boolean {
+    return (this.snapshot?.exporters.length ?? 0) > 0 || this.nodes.some((n) => n.capacity > 0 || n.allocatable > 0);
   }
 
   get probes(): ProbeResult[] {
@@ -362,7 +372,9 @@ export class GpuStore {
     for (const k of [...this.history.keys()]) if (!live.has(k)) this.history.delete(k);
   }
 
-  private async loadNodes() {
+  private async loadNodes(force: boolean) {
+    if (!force && Date.now() - this.nodesLoadedAt < DISCOVERY_TTL_MS) return;
+    this.nodesLoadedAt = Date.now();
     try {
       const list = (await Renderer.K8sApi.nodesApi.list()) ?? [];
       const infos: NodeInfo[] = list.map((n) => {
@@ -396,7 +408,7 @@ export class GpuStore {
     this.loadPins();
     this.setLoading(true);
     try {
-      const [snap] = await Promise.all([this.scraper.snapshot(force), this.loadNodes()]);
+      const [snap] = await Promise.all([this.scraper.snapshot(force), this.loadNodes(force)]);
       this.recordHistory(snap);
       runInAction(() => {
         this.snapshot = snap;

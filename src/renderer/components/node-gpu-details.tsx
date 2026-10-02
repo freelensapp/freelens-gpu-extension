@@ -2,6 +2,7 @@ import { Renderer } from "@freelensapp/extensions";
 import { observer } from "mobx-react";
 import React from "react";
 import { deviceHealth, nodeHealth, totalPowerW } from "../gpu/aggregate";
+import { nodeAdvertisesGpu } from "../gpu/presence";
 import { gpuStore } from "../gpu/store";
 import { GpuTable } from "./gpu-table";
 import { fmtMiB, gpuStyles } from "./styles";
@@ -12,9 +13,11 @@ type Props = Renderer.Component.KubeObjectDetailsProps<Renderer.K8sApi.Node>;
 
 /** "GPU" section in the Node details drawer: every GPU row on that node. */
 export const NodeGpuDetails = observer(({ object: node }: Props) => {
-  React.useEffect(() => gpuStore.subscribe(), []);
   const rows = gpuStore.rowsForNode(node.getName());
   const devs = gpuStore.devicesForNode(node.getName());
+  // Poll only for a node that advertises GPUs or that an exporter already reported; not for every node opened.
+  const poll = nodeAdvertisesGpu(node.status?.capacity as Record<string, string> | undefined) || devs.length > 0;
+  React.useEffect(() => (poll ? gpuStore.subscribe() : undefined), [poll]);
   if (rows.length === 0 && devs.length === 0) return null;
   return (
     <div className="gpuext-details">
