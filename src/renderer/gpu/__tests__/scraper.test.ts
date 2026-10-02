@@ -325,3 +325,30 @@ describe("inference probe caching", () => {
     }
   });
 });
+
+describe("GpuScraper discovery keywords", () => {
+  it("does not take the node name in a static pod's name for a GPU keyword", async () => {
+    const node = "gpu-demo-control-plane";
+    const pods = [
+      // Static pods of the control plane carry the node name: none of them is a candidate.
+      pod({ ns: "kube-system", name: `kube-apiserver-${node}`, phase: "Running", node, ports: [6443] }),
+      pod({ ns: "kube-system", name: `etcd-${node}`, phase: "Running", node, ports: [2381] }),
+      pod({ ns: "kube-system", name: `kube-scheduler-${node}`, phase: "Running", node, ports: [10259] }),
+      // An exporter on the same node is still found by its own name.
+      pod({ ns: "gpu-operator", name: "nvidia-dcgm-exporter-x1", phase: "Running", node, ports: [9400] }),
+      // A static pod that is itself GPU-related keeps the keyword outside the node name.
+      pod({ ns: "kube-system", name: `dcgm-exporter-${node}`, phase: "Running", node, ports: [9400] }),
+    ];
+    const s = new GpuScraper({
+      clusterId: () => "c1",
+      listPods: async () => pods as never,
+      listServices: async () => [],
+      fetchText: async () => "",
+    });
+    await expect(s.snapshot()).rejects.toThrow(/No GPU metrics exporter found/);
+    expect(s.lastProbes.map((p) => p.target).sort()).toEqual([
+      "gpu-operator/nvidia-dcgm-exporter-x1:9400",
+      `kube-system/dcgm-exporter-${node}:9400`,
+    ]);
+  });
+});

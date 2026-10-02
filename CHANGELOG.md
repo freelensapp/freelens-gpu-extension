@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Fix: discovery took the node name inside a pod's name for a GPU keyword, so on a node called like `gpu-*` the
+  static control plane pods (kube-apiserver, etcd, scheduler, controller manager) were probed at every discovery pass.
+  The node name is now left out of the pod name before matching (#7).
+
 ## 0.8.0
 
 - Moved to the freelensapp organization as `@freelensapp/gpu-extension`: the organization workflows (release with
