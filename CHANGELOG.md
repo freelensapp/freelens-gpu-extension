@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Fix: when a scrape failed, the rows of the last good one stayed on the page under the error with the status still
+  counting the exporters, and nothing said they were old. The status now reads "stale: last good scrape HH:MM:SS",
+  the pages built on the scrape (Pods, GPUs, Idle & waste, Allocation) and the drawer tables are dimmed, and the
+  pages built on the pod list keep full contrast (#9).
+
 ## 0.8.0
 
 - Moved to the freelensapp organization as `@freelensapp/gpu-extension`: the organization workflows (release with

@@ -130,6 +130,7 @@ export const ExportersPage = observer(({ extension }: { extension: Renderer.Lens
     <PageShell
       extension={extension}
       title="Exporters"
+      dimWhenStale={false}
       subtitle={
         <>
           How GPU metrics reach this view. Discovery lists pods, keeps Running ones whose name/image/labels mention

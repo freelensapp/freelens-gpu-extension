@@ -2,6 +2,7 @@ import { Renderer } from "@freelensapp/extensions";
 import { observer } from "mobx-react";
 import React from "react";
 import { reportJson, reportMarkdown } from "../gpu/report";
+import { scrapeStatus } from "../gpu/status";
 import { gpuStore } from "../gpu/store";
 import { gpuStyles } from "./styles";
 
@@ -14,6 +15,11 @@ export interface PageShellProps {
   children: React.ReactNode;
   /** The page only needs the pod list (Pending, Namespaces): render it even when no exporter snapshot exists. */
   podOnly?: boolean;
+  /**
+   * Dim the body while the rows come from an older scrape than the one that failed. Default: the pages built on the
+   * scrape; podOnly pages (fresh pod list) and Exporters (fresh probes) keep full contrast and show only the note.
+   */
+  dimWhenStale?: boolean;
 }
 
 async function copyText(text: string): Promise<boolean> {
@@ -56,11 +62,12 @@ const CopySnapshot = observer(({ extension }: { extension: Renderer.LensExtensio
 });
 
 /** Common chrome for every GPU page: title + version badge, scrape status, refresh, scrolling body. */
-export const PageShell = observer(({ extension, title, subtitle, children, podOnly }: PageShellProps) => {
+export const PageShell = observer(({ extension, title, subtitle, children, podOnly, dimWhenStale }: PageShellProps) => {
   React.useEffect(() => gpuStore.subscribe(), []);
   const snap = gpuStore.snapshot;
   const ready = !!snap || (!!podOnly && !!gpuStore.podState);
-  const kinds = snap ? [...new Set(snap.exporters.map((e) => e.kind))].join(", ") : "";
+  const status = scrapeStatus(snap, gpuStore.error, gpuStore.loading);
+  const dim = status.stale && (dimWhenStale ?? !podOnly);
   return (
     <div className="gpuext-page">
       <style>{gpuStyles}</style>
@@ -68,13 +75,7 @@ export const PageShell = observer(({ extension, title, subtitle, children, podOn
         <h2>
           {title} <span className="gpuext-version">v{extension.version}</span>
         </h2>
-        <span className="gpuext-status">
-          {snap
-            ? `${snap.exporters.length} exporter${snap.exporters.length === 1 ? "" : "s"} (${kinds}) · last scrape ${snap.scrapedAt.toLocaleTimeString()}`
-            : gpuStore.loading
-              ? "discovering exporters…"
-              : ""}
-        </span>
+        <span className={`gpuext-status${status.stale ? " gpuext-stale-note" : ""}`}>{status.text}</span>
         <div className="gpuext-actions">
           {gpuStore.loading && <Spinner />}
           {ready && <CopySnapshot extension={extension} />}
@@ -87,7 +88,7 @@ export const PageShell = observer(({ extension, title, subtitle, children, podOn
         {!ready && !gpuStore.loading && !gpuStore.error && (
           <div className="gpuext-empty">Waiting for the first scrape…</div>
         )}
-        {ready && children}
+        {ready && (dim ? <div className="gpuext-stale">{children}</div> : children)}
       </div>
     </div>
   );
