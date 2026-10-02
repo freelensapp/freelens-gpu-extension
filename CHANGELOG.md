@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fix: when a scrape failed, the rows of the last good one stayed on the page under the error with the status still
+  counting the exporters, and nothing said they were old. The status now reads "stale: last good scrape HH:MM:SS",
+  the pages built on the scrape (Pods, GPUs, Idle & waste, Allocation) and the drawer tables are dimmed, and the
+  pages built on the pod list keep full contrast. When every exporter scrape fails, discovery runs again at the next
+  tick instead of scraping the same dead pods until its cache expires (#9).
 - Fix: discovery took the node name inside a pod's name for a GPU keyword, so on a node called like `gpu-*` the
   static control plane pods (kube-apiserver, etcd, scheduler, controller manager) were probed at every discovery pass.
   The node name is now left out of the pod name before matching (#7).

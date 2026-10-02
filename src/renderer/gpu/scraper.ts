@@ -465,6 +465,9 @@ export class GpuScraper {
     );
     const ok = bodies.filter((b): b is NonNullable<typeof b> => !!b);
     if (ok.length === 0) {
+      // Every exporter is gone or unreachable (deleted, replaced): discover again at the next tick instead of scraping
+      // the same dead pods until the discovery cache expires.
+      this.invalidate();
       throw new Error(
         `All ${exporters.length} exporter scrapes failed: ${scraped.map((s) => `${s.namespace}/${s.name}: ${s.error}`).join("; ")}`,
       );
