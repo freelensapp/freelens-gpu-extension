@@ -24,6 +24,8 @@ export const gpuStyles = `
 .gpuext-cell.ellipsis { overflow: hidden; text-overflow: ellipsis; }
 .gpuext-mono { font-family: var(--font-monospace, monospace); }
 .gpuext-dim { color: var(--textColorSecondary); }
+.gpuext-stale { opacity: 0.5; }
+.gpuext-status.gpuext-stale-note, .gpuext-hint.gpuext-stale-note { color: var(--colorWarning); }
 .gpuext-bar { display: inline-block; width: 80px; height: 8px; border-radius: 4px; background: var(--borderFaintColor); vertical-align: middle; margin-right: 8px; overflow: hidden; }
 .gpuext-bar > span { display: block; height: 100%; border-radius: 4px; }
 .gpuext-bar.ok > span { background: var(--colorOk); }
