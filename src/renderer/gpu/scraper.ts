@@ -51,10 +51,15 @@ function metricsPath(ns: string, name: string, port: number): string {
   return `/api/v1/namespaces/${ns}/pods/${name}:${port}/proxy/metrics`;
 }
 
-/** Name, images and labels of a pod, lower-cased, for keyword matching. */
+/**
+ * Name, images and labels of a pod, lower-cased, for keyword matching. The node name is taken out of the pod name:
+ * static pods are named after their node (kube-apiserver-<node>), and GPU node pools often have "gpu" in the node name,
+ * which would make every control plane pod a candidate.
+ */
 function podHaystack(pod: Pod): string {
+  const node = pod.getNodeName();
   return [
-    pod.getName(),
+    node ? pod.getName().replaceAll(node, "") : pod.getName(),
     ...pod.getContainers().map((c) => c.image ?? ""),
     ...Object.entries(pod.metadata.labels ?? {}).flatMap(([k, v]) => [k, v]),
   ]
@@ -101,13 +106,7 @@ function containersReady(pod: Pod): boolean {
 }
 
 function looksGpuRelated(pod: Pod): boolean {
-  const hay = [
-    pod.getName(),
-    ...pod.getContainers().map((c) => c.image ?? ""),
-    ...Object.entries(pod.metadata.labels ?? {}).flatMap(([k, v]) => [k, v]),
-  ]
-    .join(" ")
-    .toLowerCase();
+  const hay = podHaystack(pod);
   return GPU_KEYWORDS.some((k) => hay.includes(k));
 }
 
