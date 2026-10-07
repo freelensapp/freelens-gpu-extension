@@ -16,6 +16,10 @@ export interface PendingGpuPod {
   createdAt?: number;
   /** GPU resources requested per resource name (container limits, falling back to requests), summed over containers. */
   requests: Record<string, number>;
+  /** Devices asked for through unallocated DRA claims, per device class, e.g. { "gpu.nvidia.com (DRA)": 8 }. */
+  draRequests?: Record<string, number>;
+  /** Hints for those DRA claims (computed from the ResourceSlices when the pod list is read). */
+  draHints?: string[];
   /** PodScheduled condition reason, e.g. "Unschedulable". */
   reason?: string;
   /** Scheduler message, e.g. "0/3 nodes are available: 3 Insufficient nvidia.com/gpu." */

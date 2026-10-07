@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- GPUs allocated with Dynamic Resource Allocation (`resource.k8s.io`, NVIDIA's DRA driver `gpu.nvidia.com`): pods
+  that hold a GPU or a MIG slice through a `ResourceClaim` instead of `nvidia.com/gpu` count for their pod, namespace
+  and node; the devices each node publishes in its `ResourceSlice` count as capacity on the Allocation view; pending
+  claims show in Pending with what they ask for against what the nodes offer; and without pod labels on dcgm-exporter
+  the claim names the pod holding each card, by UUID. Reads v1, v1beta2 and v1beta1, and needs `list` on
+  `resourceslices` and `resourceclaims`; clusters without DRA or without that permission work as before (#25).
+
 ## 0.8.1
 
 - Fix: the tables were wider than the page in a 1440 px window, so Health and Power were out of sight. Text columns

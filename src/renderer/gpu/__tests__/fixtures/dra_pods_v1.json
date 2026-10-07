@@ -1,0 +1,136 @@
+{
+  "items": [
+    {
+      "metadata": {
+        "namespace": "dra-ml",
+        "name": "big-job"
+      },
+      "spec": {
+        "nodeName": null,
+        "resourceClaims": [
+          {
+            "name": "gpus",
+            "resourceClaimName": "eight-gpus"
+          }
+        ],
+        "containers": [
+          {
+            "name": "main",
+            "resources": {
+              "claims": [
+                {
+                  "name": "gpus"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "status": {
+        "phase": "Pending",
+        "resourceClaimStatuses": null,
+        "conditions": [
+          {
+            "type": "PodScheduled",
+            "observedGeneration": 1,
+            "status": "False",
+            "lastProbeTime": null,
+            "lastTransitionTime": "2026-10-06T08:44:19Z",
+            "reason": "Unschedulable",
+            "message": "0/1 nodes are available: 1 cannot allocate all claims. preemption: 0/1 nodes are available: 1 Preemption is not helpful for scheduling."
+          }
+        ]
+      }
+    },
+    {
+      "metadata": {
+        "namespace": "dra-ml",
+        "name": "notebook-0"
+      },
+      "spec": {
+        "nodeName": "dra-test-control-plane",
+        "resourceClaims": [
+          {
+            "name": "slice",
+            "resourceClaimTemplateName": "one-slice"
+          }
+        ],
+        "containers": [
+          {
+            "name": "main",
+            "resources": {
+              "claims": [
+                {
+                  "name": "slice"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "status": {
+        "phase": "Pending",
+        "resourceClaimStatuses": [
+          {
+            "name": "slice",
+            "resourceClaimName": "notebook-0-slice-k7nxb"
+          }
+        ],
+        "conditions": [
+          {
+            "type": "PodScheduled",
+            "observedGeneration": 1,
+            "status": "True",
+            "lastProbeTime": null,
+            "lastTransitionTime": "2026-10-06T08:44:19Z"
+          }
+        ]
+      }
+    },
+    {
+      "metadata": {
+        "namespace": "dra-ml",
+        "name": "trainer-0"
+      },
+      "spec": {
+        "nodeName": "dra-test-control-plane",
+        "resourceClaims": [
+          {
+            "name": "gpu",
+            "resourceClaimTemplateName": "one-gpu"
+          }
+        ],
+        "containers": [
+          {
+            "name": "main",
+            "resources": {
+              "claims": [
+                {
+                  "name": "gpu"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "status": {
+        "phase": "Pending",
+        "resourceClaimStatuses": [
+          {
+            "name": "gpu",
+            "resourceClaimName": "trainer-0-gpu-tqn26"
+          }
+        ],
+        "conditions": [
+          {
+            "type": "PodScheduled",
+            "observedGeneration": 1,
+            "status": "True",
+            "lastProbeTime": null,
+            "lastTransitionTime": "2026-10-06T08:44:19Z"
+          }
+        ]
+      }
+    }
+  ]
+}

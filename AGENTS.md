@@ -74,7 +74,9 @@ Build output goes to `out/`.
 
 - **Zero cluster footprint.** The extension only reads: `list pods`, `list nodes` and
   `get pods/proxy` (plus `list services` and `get services/proxy` for the Prometheus
-  fallback). Never add a DaemonSet, a CRD or a write path to the cluster.
+  fallback, and `list resourceslices` / `resourceclaims` in `resource.k8s.io` for DRA,
+  which must keep working when that API is missing or forbidden). Never add a DaemonSet,
+  a CRD or a write path to the cluster.
 - **Same numbers as kubectl-gpugo.** `src/renderer/gpu/aggregate.ts` is a port of the CLI's
   scraper. Change the attribution rules in both and keep the shared fixtures green in both.
 - **Pure aggregation, tested.** Parsing and aggregation are pure functions with colocated

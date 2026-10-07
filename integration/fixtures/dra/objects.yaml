@@ -1,0 +1,172 @@
+# Fake DRA objects in the shape published by the NVIDIA DRA driver (dra-driver-nvidia-gpu).
+# No kubelet plugin runs: the scheduler still allocates the claims, so the extension can be
+# checked without a GPU. The pods stay in ContainerCreating because no driver prepares the devices.
+apiVersion: resource.k8s.io/v1
+kind: DeviceClass
+metadata:
+  name: gpu.nvidia.com
+spec:
+  selectors:
+    - cel:
+        expression: device.driver == 'gpu.nvidia.com' && device.attributes['gpu.nvidia.com'].type == 'gpu'
+---
+apiVersion: resource.k8s.io/v1
+kind: DeviceClass
+metadata:
+  name: mig.nvidia.com
+spec:
+  selectors:
+    - cel:
+        expression: device.driver == 'gpu.nvidia.com' && device.attributes['gpu.nvidia.com'].type == 'mig'
+---
+apiVersion: resource.k8s.io/v1
+kind: ResourceSlice
+metadata:
+  name: __NODE__-gpu.nvidia.com
+spec:
+  driver: gpu.nvidia.com
+  nodeName: __NODE__
+  pool:
+    name: __NODE__
+    generation: 1
+    resourceSliceCount: 1
+  devices:
+    - name: gpu-0
+      attributes:
+        type: {string: gpu}
+        uuid: {string: GPU-11111111-2222-3333-4444-555555555555}
+        productName: {string: NVIDIA H100 80GB HBM3}
+        brand: {string: Nvidia}
+        architecture: {string: Hopper}
+        index: {int: 0}
+        driverVersion: {version: 570.124.6}
+      capacity:
+        memory: {value: 80Gi}
+    - name: gpu-1
+      attributes:
+        type: {string: gpu}
+        uuid: {string: GPU-66666666-7777-8888-9999-000000000000}
+        productName: {string: NVIDIA H100 80GB HBM3}
+        brand: {string: Nvidia}
+        architecture: {string: Hopper}
+        index: {int: 1}
+        driverVersion: {version: 570.124.6}
+      capacity:
+        memory: {value: 80Gi}
+    - name: gpu-2-mig-1g10gb-19-0
+      attributes:
+        type: {string: mig}
+        uuid: {string: MIG-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee}
+        parentUUID: {string: GPU-abababab-cdcd-efef-0101-232323232323}
+        productName: {string: NVIDIA A100-SXM4-80GB}
+        profile: {string: 1g.10gb}
+        index: {int: 2}
+      capacity:
+        memory: {value: 9728Mi}
+    - name: gpu-2-mig-1g10gb-19-1
+      attributes:
+        type: {string: mig}
+        uuid: {string: MIG-ffffffff-1111-2222-3333-444444444444}
+        parentUUID: {string: GPU-abababab-cdcd-efef-0101-232323232323}
+        productName: {string: NVIDIA A100-SXM4-80GB}
+        profile: {string: 1g.10gb}
+        index: {int: 2}
+      capacity:
+        memory: {value: 9728Mi}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dra-ml
+---
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaimTemplate
+metadata:
+  name: one-gpu
+  namespace: dra-ml
+spec:
+  spec:
+    devices:
+      requests:
+        - name: gpu
+          exactly:
+            deviceClassName: gpu.nvidia.com
+---
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaimTemplate
+metadata:
+  name: one-slice
+  namespace: dra-ml
+spec:
+  spec:
+    devices:
+      requests:
+        - name: slice
+          exactly:
+            deviceClassName: mig.nvidia.com
+---
+# A shared claim referenced by name, asking for more GPUs than exist: never allocated.
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaim
+metadata:
+  name: eight-gpus
+  namespace: dra-ml
+spec:
+  devices:
+    requests:
+      - name: gpus
+        exactly:
+          deviceClassName: gpu.nvidia.com
+          allocationMode: ExactCount
+          count: 8
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: trainer-0
+  namespace: dra-ml
+spec:
+  resourceClaims:
+    - name: gpu
+      resourceClaimTemplateName: one-gpu
+  containers:
+    - name: main
+      image: __BUSYBOX__
+      command: [sleep, infinity]
+      resources:
+        claims:
+          - name: gpu
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: notebook-0
+  namespace: dra-ml
+spec:
+  resourceClaims:
+    - name: slice
+      resourceClaimTemplateName: one-slice
+  containers:
+    - name: main
+      image: __BUSYBOX__
+      command: [sleep, infinity]
+      resources:
+        claims:
+          - name: slice
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: big-job
+  namespace: dra-ml
+spec:
+  resourceClaims:
+    - name: gpus
+      resourceClaimName: eight-gpus
+  containers:
+    - name: main
+      image: __BUSYBOX__
+      command: [sleep, infinity]
+      resources:
+        claims:
+          - name: gpus

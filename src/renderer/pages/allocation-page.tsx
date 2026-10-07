@@ -172,8 +172,8 @@ export const AllocationPage = observer(({ extension }: { extension: Renderer.Len
       title="GPU allocation by node"
       subtitle={
         <>
-          What the scheduler thinks (<code>nvidia.com/gpu</code> capacity vs pod requests) next to what the exporters
-          measure.
+          What the scheduler thinks (<code>nvidia.com/gpu</code> capacity vs pod requests, plus GPUs published and
+          claimed through DRA) next to what the exporters measure.
           {rows.length > 0 && (
             <>
               {" "}

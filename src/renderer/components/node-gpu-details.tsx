@@ -17,7 +17,10 @@ export const NodeGpuDetails = observer(({ object: node }: Props) => {
   const rows = gpuStore.rowsForNode(node.getName());
   const devs = gpuStore.devicesForNode(node.getName());
   // Poll only for a node that advertises GPUs or that an exporter already reported; not for every node opened.
-  const poll = nodeAdvertisesGpu(node.status?.capacity as Record<string, string> | undefined) || devs.length > 0;
+  const poll =
+    nodeAdvertisesGpu(node.status?.capacity as Record<string, string> | undefined) ||
+    devs.length > 0 ||
+    gpuStore.draDevicesOn(node.getName()) > 0;
   React.useEffect(() => (poll ? gpuStore.subscribe() : undefined), [poll]);
   if (rows.length === 0 && devs.length === 0) return null;
   const status = scrapeStatus(gpuStore.snapshot, gpuStore.error, false);

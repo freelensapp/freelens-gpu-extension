@@ -1,0 +1,140 @@
+{
+  "kind": "ResourceSliceList",
+  "apiVersion": "resource.k8s.io/v1",
+  "items": [
+    {
+      "metadata": {
+        "name": "dra-test-control-plane-gpu.nvidia.com"
+      },
+      "spec": {
+        "driver": "gpu.nvidia.com",
+        "pool": {
+          "name": "dra-test-control-plane",
+          "generation": 1,
+          "resourceSliceCount": 1
+        },
+        "nodeName": "dra-test-control-plane",
+        "devices": [
+          {
+            "name": "gpu-0",
+            "attributes": {
+              "architecture": {
+                "string": "Hopper"
+              },
+              "brand": {
+                "string": "Nvidia"
+              },
+              "driverVersion": {
+                "version": "570.124.6"
+              },
+              "index": {
+                "int": 0
+              },
+              "productName": {
+                "string": "NVIDIA H100 80GB HBM3"
+              },
+              "type": {
+                "string": "gpu"
+              },
+              "uuid": {
+                "string": "GPU-11111111-2222-3333-4444-555555555555"
+              }
+            },
+            "capacity": {
+              "memory": {
+                "value": "80Gi"
+              }
+            }
+          },
+          {
+            "name": "gpu-1",
+            "attributes": {
+              "architecture": {
+                "string": "Hopper"
+              },
+              "brand": {
+                "string": "Nvidia"
+              },
+              "driverVersion": {
+                "version": "570.124.6"
+              },
+              "index": {
+                "int": 1
+              },
+              "productName": {
+                "string": "NVIDIA H100 80GB HBM3"
+              },
+              "type": {
+                "string": "gpu"
+              },
+              "uuid": {
+                "string": "GPU-66666666-7777-8888-9999-000000000000"
+              }
+            },
+            "capacity": {
+              "memory": {
+                "value": "80Gi"
+              }
+            }
+          },
+          {
+            "name": "gpu-2-mig-1g10gb-19-0",
+            "attributes": {
+              "index": {
+                "int": 2
+              },
+              "parentUUID": {
+                "string": "GPU-abababab-cdcd-efef-0101-232323232323"
+              },
+              "productName": {
+                "string": "NVIDIA A100-SXM4-80GB"
+              },
+              "profile": {
+                "string": "1g.10gb"
+              },
+              "type": {
+                "string": "mig"
+              },
+              "uuid": {
+                "string": "MIG-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+              }
+            },
+            "capacity": {
+              "memory": {
+                "value": "9728Mi"
+              }
+            }
+          },
+          {
+            "name": "gpu-2-mig-1g10gb-19-1",
+            "attributes": {
+              "index": {
+                "int": 2
+              },
+              "parentUUID": {
+                "string": "GPU-abababab-cdcd-efef-0101-232323232323"
+              },
+              "productName": {
+                "string": "NVIDIA A100-SXM4-80GB"
+              },
+              "profile": {
+                "string": "1g.10gb"
+              },
+              "type": {
+                "string": "mig"
+              },
+              "uuid": {
+                "string": "MIG-ffffffff-1111-2222-3333-444444444444"
+              }
+            },
+            "capacity": {
+              "memory": {
+                "value": "9728Mi"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
