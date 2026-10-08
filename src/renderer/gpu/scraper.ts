@@ -23,6 +23,18 @@ import {
   gpuResourceCount,
   usesGpuResource,
 } from "./aggregate";
+import {
+  type DraIndex,
+  type DraState,
+  draRequestLabel,
+  draResourceName,
+  explainPendingClaims,
+  indexDra,
+  parseResourceClaims,
+  parseResourceSlices,
+  pendingGpuClaims,
+  podsOnCard,
+} from "./dra";
 import { classifyInference, INFERENCE_HINT, type InferenceEngine, parseVllm, type VllmSample } from "./inference";
 import { gpuRequestsOf, type PendingGpuPod } from "./pending";
 import { classifyMetrics, type Families, parsePrometheusText } from "./prom";
@@ -143,16 +155,25 @@ function requestsGpu(pod: Pod): boolean {
 }
 
 /** A Pending pod the scheduler has not placed yet (PodScheduled != True); pods pulling images are not "waiting for a GPU". */
-function pendingOf(pod: Pod): PendingGpuPod[] {
+function pendingOf(pod: Pod, dra: DraIndex | undefined): PendingGpuPod[] {
   const cond = pod.status?.conditions?.find((c) => c.type === "PodScheduled");
   if (cond?.status === "True") return [];
   const created = Date.parse(pod.metadata.creationTimestamp ?? "");
+  const claims = dra ? pendingGpuClaims(pod as never, dra) : [];
+  const draRequests: Record<string, number> = {};
+  for (const c of claims) {
+    for (const r of c.requests) {
+      const k = draRequestLabel(r.deviceClasses);
+      draRequests[k] = (draRequests[k] ?? 0) + r.count;
+    }
+  }
   return [
     {
       namespace: pod.getNs(),
       pod: pod.getName(),
       createdAt: Number.isNaN(created) ? undefined : created,
       requests: gpuRequestsOf(pod.getContainers()),
+      ...(claims.length > 0 && dra ? { draRequests, draHints: explainPendingClaims(claims, dra) } : {}),
       reason: cond?.reason,
       message: cond?.message,
     },
@@ -165,6 +186,8 @@ export interface ScraperDeps {
   /** Services, for the Prometheus fallback. */
   listServices: () => Promise<ServiceLike[]>;
   fetchText: (clusterId: string, path: string, timeoutMs: number) => Promise<string>;
+  /** GET of a resource.k8s.io list (DRA). Optional: without it the scraper works from the device plugin's view only. */
+  fetchDra?: (clusterId: string, path: string) => Promise<string>;
 }
 
 const defaultDeps: ScraperDeps = {
@@ -205,6 +228,7 @@ const defaultDeps: ScraperDeps = {
     }
   },
 };
+defaultDeps.fetchDra = (clusterId, path) => defaultDeps.fetchText(clusterId, path, PROBE_TIMEOUT_MS);
 
 const log = {
   info: (m: string) => Common.logger.info(`[freelens-gpu-extension] ${m}`),
@@ -234,6 +258,10 @@ export class GpuScraper {
   private gpuPodsByNode = new Map<string, string[]>();
   /** Pod-derived state from the last successful pod list (undefined until one succeeds). */
   podState: PodState | undefined = undefined;
+  /** DRA devices and claims from the last discovery; undefined when the cluster has no DRA API or no permission. */
+  dra: DraIndex | undefined = undefined;
+  /** Outcome of the last DRA read, for the Exporters page and the logs. */
+  draNote = "";
   /** Probes of the last discovery pass and of the last Prometheus search; see lastProbes. */
   private discoveryProbes: ProbeResult[] = [];
   private promProbes: ProbeResult[] = [];
@@ -276,20 +304,25 @@ export class GpuScraper {
     const clusterId = this.deps.clusterId();
     if (!clusterId) throw new Error("no active cluster");
 
-    const pods = await this.deps.listPods();
+    const [pods, dra] = await Promise.all([this.deps.listPods(), this.loadDra(clusterId)]);
     this.lastPodCount = pods.length;
+    this.dra = dra ? indexDra(dra) : undefined;
+    const draHeld = (p: Pod) => this.dra?.podDevices.get(`${p.getNs()}/${p.getName()}`) ?? [];
+    const holdsGpu = (p: Pod) => requestsGpu(p) || draHeld(p).length > 0;
     const byNode = new Map<string, string[]>();
     const requested: Record<string, GpuRequests> = {};
     const requestedNs: Record<string, GpuRequests> = {};
     const add = (m: Record<string, GpuRequests>, key: string, p: Pod, id: string) => {
       const r = (m[key] ??= { gpus: 0, byResource: {}, pods: [] });
-      r.gpus += gpusRequested(p);
+      const viaDra = draHeld(p);
+      r.gpus += gpusRequested(p) + viaDra.length;
       for (const [k, v] of Object.entries(gpuRequestsOf(p.getContainers())))
         r.byResource[k] = (r.byResource[k] ?? 0) + v;
+      for (const d of viaDra) r.byResource[draResourceName(d)] = (r.byResource[draResourceName(d)] ?? 0) + 1;
       r.pods.push(id);
     };
     for (const p of pods) {
-      if (!requestsGpu(p)) continue;
+      if (!holdsGpu(p)) continue;
       const phase = p.getStatusPhase();
       const n = p.getNodeName() ?? "";
       const id = `${p.getNs()}/${p.getName()}`;
@@ -306,7 +339,23 @@ export class GpuScraper {
       listedAt: new Date(),
       requestedByNode: requested,
       requestedByNamespace: requestedNs,
-      pending: pods.filter((p) => p.getStatusPhase() === "Pending" && requestsGpu(p)).flatMap(pendingOf),
+      pending: pods
+        .filter(
+          (p) =>
+            p.getStatusPhase() === "Pending" &&
+            (requestsGpu(p) ||
+              draHeld(p).length > 0 ||
+              (!!this.dra && pendingGpuClaims(p as never, this.dra).length > 0)),
+        )
+        .flatMap((p) => pendingOf(p, this.dra)),
+      draDevicesByNode: this.dra
+        ? Object.fromEntries(
+            [...this.dra.devicesByNode].map(([node, ds]) => [
+              node,
+              { count: ds.length, product: ds.find((d) => d.product)?.product },
+            ]),
+          )
+        : undefined,
     };
 
     type Candidate = { ns: string; name: string; port: number; node: string };
@@ -327,7 +376,7 @@ export class GpuScraper {
     const byId = new Map<string, Candidate>();
     for (const c of [...auto, ...pinned]) byId.set(`${c.ns}/${c.name}`, c); // a pin overrides the guessed port
     const candidates = [...byId.values()];
-    const inferenceProbe = this.discoverInference(pods, clusterId);
+    const inferenceProbe = this.discoverInference(pods, clusterId, holdsGpu);
     this.lastCandidateCount = candidates.length;
     const probes: ProbeResult[] = [];
     const probed = await Promise.all(
@@ -364,17 +413,51 @@ export class GpuScraper {
   }
 
   /**
+   * ResourceSlices and ResourceClaims (resource.k8s.io), newest served version first. A cluster without DRA (404 on
+   * every version) or a kubeconfig without permission gives undefined: the extension then works from the device
+   * plugin's view alone, as before.
+   */
+  private async loadDra(clusterId: string): Promise<DraState | undefined> {
+    const fetchDra = this.deps.fetchDra;
+    if (!fetchDra) return undefined;
+    let lastError = "";
+    for (const v of ["v1", "v1beta2", "v1beta1"]) {
+      try {
+        const base = `/apis/resource.k8s.io/${v}`;
+        const [slices, claims] = await Promise.all([
+          fetchDra(clusterId, `${base}/resourceslices`),
+          fetchDra(clusterId, `${base}/resourceclaims`),
+        ]);
+        const state = {
+          devices: parseResourceSlices(JSON.parse(slices)),
+          claims: parseResourceClaims(JSON.parse(claims)),
+        };
+        this.draNote = `DRA (resource.k8s.io/${v}): ${state.devices.length} GPU devices, ${state.claims.length} claims`;
+        return state;
+      } catch (e) {
+        lastError = describe(e);
+        // Only a missing version is worth trying the next one; forbidden or unreachable stays so on every version.
+        if (!/\b404\b/.test(lastError)) break;
+      }
+    }
+    this.draNote = /\b404\b/.test(lastError)
+      ? "DRA: resource.k8s.io not served by this cluster"
+      : `DRA: not read (${lastError.slice(0, 120)})`;
+    return undefined;
+  }
+
+  /**
    * Inference servers: Running pods that request a GPU or look like one (vllm, sglang, triton, kserve), probed once and
    * kept when their /metrics carries an engine's metrics. Pods that are not are skipped for 10 minutes.
    */
-  private async discoverInference(pods: Pod[], clusterId: string): Promise<void> {
+  private async discoverInference(pods: Pod[], clusterId: string, holdsGpu: (p: Pod) => boolean): Promise<void> {
     const now = Date.now();
     for (const [k, until] of this.notInference) if (until <= now) this.notInference.delete(k);
     const known = new Map(this.inferenceTargets.map((t) => [`${t.namespace}/${t.pod}`, t]));
     const next: InferenceTarget[] = [];
     await Promise.all(
       pods
-        .filter((p) => p.getStatusPhase() === "Running" && (requestsGpu(p) || INFERENCE_HINT.test(podHaystack(p))))
+        .filter((p) => p.getStatusPhase() === "Running" && (holdsGpu(p) || INFERENCE_HINT.test(podHaystack(p))))
         .map(async (p) => {
           const key = `${p.getNs()}/${p.getName()}`;
           const hit = known.get(key);
@@ -597,7 +680,17 @@ export class GpuScraper {
       const samples = dcgmRest.flatMap((b) => extractDcgmSamples(b.fams, b.ex.nodeName));
       let dcgmRows = aggregateByPod(samples);
       if (dcgmRows.length === 0) {
-        dcgmRows = aggregateByGPU(samples).map((r) => ({ ...r, hintPods: this.gpuPodsByNode.get(r.node) ?? [] }));
+        // Without pod labels, DRA claims still name the pod holding each card (by UUID): use them before falling back
+        // to every GPU pod of the node.
+        const devs = dcgms.flatMap((b) => aggregateDevicesDcgm(b.fams, b.ex.nodeName));
+        const draPods = (r: PodGPU) => {
+          const uuid = devs.find((d) => d.node === r.node && d.gpu === r.gpuIndex)?.uuid;
+          return uuid && this.dra ? podsOnCard(this.dra, uuid) : [];
+        };
+        dcgmRows = aggregateByGPU(samples).map((r) => {
+          const held = draPods(r);
+          return { ...r, hintPods: held.length > 0 ? held : (this.gpuPodsByNode.get(r.node) ?? []) };
+        });
         if (dcgmRows.length > 0) mode = "gpu";
       }
       rows = rows.concat(dcgmRows);

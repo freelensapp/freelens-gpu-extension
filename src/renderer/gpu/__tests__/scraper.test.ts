@@ -454,3 +454,118 @@ describe("GpuScraper discovery cache without exporters", () => {
     expect(calls).toMatchObject({ pods: 3, services: 3 });
   });
 });
+
+describe("GpuScraper with DRA", () => {
+  const raw = (name: string) => readFileSync(join(__dirname, "fixtures", name), "utf8");
+  type RawPod = {
+    metadata: { namespace: string; name: string };
+    spec: { nodeName?: string; containers: { name: string; resources: object }[] };
+    status: { phase: string; conditions?: object[] };
+  };
+  const draPods = (JSON.parse(raw("dra_pods_v1.json")).items as RawPod[]).map((p) => ({
+    ...p,
+    metadata: { ...p.metadata, labels: {}, annotations: {}, creationTimestamp: "2026-10-06T08:00:00Z" },
+    getNs: () => p.metadata.namespace,
+    getName: () => p.metadata.name,
+    getStatusPhase: () => p.status.phase,
+    getNodeName: () => p.spec.nodeName,
+    getContainers: () => p.spec.containers,
+  }));
+
+  const scraper = (fetchDra?: (c: string, path: string) => Promise<string>) =>
+    new GpuScraper({
+      clusterId: () => "c1",
+      listPods: async () => draPods as never,
+      listServices: async () => [],
+      fetchText: async () => "",
+      fetchDra,
+    });
+
+  it("counts pods holding GPUs through claims, publishes the devices per node, and explains the pending claim", async () => {
+    const paths: string[] = [];
+    const s = scraper(async (_c, path) => {
+      paths.push(path);
+      return raw(path.endsWith("resourceslices") ? "dra_resourceslices_v1.json" : "dra_resourceclaims_v1.json");
+    });
+    await expect(s.snapshot()).rejects.toThrow(/No GPU metrics exporter found/);
+    expect(paths).toEqual(["/apis/resource.k8s.io/v1/resourceslices", "/apis/resource.k8s.io/v1/resourceclaims"]);
+
+    const ps = s.podState;
+    // trainer-0 and notebook-0 are bound to the node (ContainerCreating: no real driver prepares the devices).
+    expect(ps?.requestedByNode["dra-test-control-plane"]).toMatchObject({
+      gpus: 2,
+      byResource: { "gpu (DRA)": 1, "mig-1g.10gb (DRA)": 1 },
+    });
+    expect(ps?.requestedByNamespace["dra-ml"].pods.sort()).toEqual(["dra-ml/notebook-0", "dra-ml/trainer-0"]);
+    expect(ps?.draDevicesByNode).toEqual({ "dra-test-control-plane": { count: 4, product: "NVIDIA H100 80GB HBM3" } });
+    expect(ps?.pending).toEqual([
+      expect.objectContaining({
+        pod: "big-job",
+        requests: {},
+        draRequests: { "gpu (DRA)": 8 },
+        draHints: ["Needs 8 gpu on one node (claim eight-gpus); the most any node offers is 2."],
+      }),
+    ]);
+    expect(s.draNote).toBe("DRA (resource.k8s.io/v1): 4 GPU devices, 3 claims");
+  });
+
+  it("names the pod holding each card from the claims when dcgm-exporter has no pod labels", async () => {
+    // dcgm-exporter without --kubernetes: per-GPU series only, keyed by UUID.
+    const node = "dra-test-control-plane";
+    const metrics = [
+      ["GPU-11111111-2222-3333-4444-555555555555", "0", 60],
+      ["GPU-66666666-7777-8888-9999-000000000000", "1", 0],
+    ]
+      .map(([uuid, gpu, util]) =>
+        [
+          `DCGM_FI_DEV_GPU_UTIL{gpu="${gpu}",UUID="${uuid}",Hostname="${node}",modelName="NVIDIA H100 80GB HBM3"} ${util}`,
+          `DCGM_FI_DEV_FB_USED{gpu="${gpu}",UUID="${uuid}",Hostname="${node}"} 1000`,
+          `DCGM_FI_DEV_FB_FREE{gpu="${gpu}",UUID="${uuid}",Hostname="${node}"} 80000`,
+        ].join("\n"),
+      )
+      .join("\n");
+    const exporter = {
+      ...pod({ ns: "gpu-operator", name: "nvidia-dcgm-exporter-x", phase: "Running", node, ports: [9400] }),
+    };
+    const s = new GpuScraper({
+      clusterId: () => "c1",
+      listPods: async () => [...draPods, exporter] as never,
+      listServices: async () => [],
+      fetchText: async () => metrics,
+      fetchDra: async (_c, path) =>
+        raw(path.endsWith("resourceslices") ? "dra_resourceslices_v1.json" : "dra_resourceclaims_v1.json"),
+    });
+    const snap = await s.snapshot();
+    expect(snap.mode).toBe("gpu");
+    const byGpu = Object.fromEntries(snap.rows.map((r) => [r.gpuIndex, r.hintPods]));
+    expect(byGpu["0"]).toEqual(["dra-ml/trainer-0"]); // the claim holds gpu-0, whose UUID dcgm reports for GPU 0
+    // GPU 1 is free in DRA: fall back to the Running GPU pods of the node, as without DRA. There are none: both DRA
+    // pods stay in ContainerCreating because no real driver prepares their devices.
+    expect(byGpu["1"]).toEqual([]);
+  });
+
+  it("falls back to older API versions, and works without DRA on a cluster that does not serve it", async () => {
+    const tried: string[] = [];
+    const s = scraper(async (_c, path) => {
+      tried.push(path.split("/")[3]);
+      throw new Error(`HTTP 404 Not Found for /api-kube${path}`);
+    });
+    await expect(s.snapshot()).rejects.toThrow(/No GPU metrics exporter found/);
+    expect([...new Set(tried)]).toEqual(["v1", "v1beta2", "v1beta1"]);
+    expect(s.dra).toBeUndefined();
+    expect(s.podState?.draDevicesByNode).toBeUndefined();
+    expect(s.podState?.pending).toEqual([]);
+    expect(s.draNote).toBe("DRA: resource.k8s.io not served by this cluster");
+  });
+
+  it("does not retry other versions when the kubeconfig may not list DRA objects", async () => {
+    let calls = 0;
+    const s = scraper(async () => {
+      calls++;
+      throw new Error("HTTP 403 Forbidden for /api-kube/apis/resource.k8s.io/v1/resourceslices");
+    });
+    await expect(s.snapshot()).rejects.toThrow();
+    expect(calls).toBe(2); // slices and claims of v1, in parallel
+    expect(s.draNote).toMatch(/^DRA: not read \(HTTP 403 Forbidden/);
+  });
+});

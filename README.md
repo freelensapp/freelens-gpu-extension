@@ -61,7 +61,9 @@ are blacked out.
   cluster: `list pods` cluster-wide and `list nodes` (discovery and the
   Allocation view), `get pods/proxy` in the exporter's namespace (the
   scrape), plus `list services` and `get services/proxy` for the Prometheus
-  fallback.
+  fallback, and `list resourceslices` and `list resourceclaims`
+  (`resource.k8s.io`) on clusters with Dynamic Resource Allocation. Without
+  that permission, or on a cluster without DRA, the rest works as before.
 - **Node.js** is required only when building the extension from source; it
   is not needed to run it. The package is a self-contained bundle.
 
@@ -76,6 +78,7 @@ are blacked out.
 | Per-process exporter | `/metrics` emitting `gpu_process_memory_bytes` with `namespace` and `pod` labels | Per process, also for workloads that bypass the device plugin with `NVIDIA_VISIBLE_DEVICES=all`; power split by VRAM share |
 | Prometheus, Thanos, VictoriaMetrics or Mimir query API | Found automatically in the cluster, or pinned as `namespace/svc/name:port`, through the service proxy | The same metrics, with the labels Prometheus rewrites repaired; used when no exporter pod answers |
 | Pinned exporter pods | `namespace/pod-prefix:port` on the **Exporters** page, per cluster | As above, by the content of `/metrics` |
+| Dynamic Resource Allocation (`resource.k8s.io`), NVIDIA DRA driver (`gpu.nvidia.com`) | `ResourceSlice` devices per node and `ResourceClaim` allocations, read with the pod list | GPUs and MIG slices held through a claim count for their pod, namespace and node (Pods, Namespaces, Allocation); unallocated claims show in Pending. Without pod labels on dcgm-exporter, the claim names the pod holding each card (by UUID) |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -130,7 +133,11 @@ You can also build and pack the extension yourself, see
   pod-proxy subresource over the Freelens cluster connection. No DaemonSet,
   no Prometheus required, no port-forward, no RBAC beyond `list pods`,
   `list nodes`, `get pods/proxy` (plus `list services` and
-  `get services/proxy` for the Prometheus fallback).
+  `get services/proxy` for the Prometheus fallback, and `list` on DRA
+  `resourceslices` and `resourceclaims` where DRA is used).
+- **Dynamic Resource Allocation**: GPUs requested through a `ResourceClaim`
+  instead of `nvidia.com/gpu` are recognised from the DRA objects, with the
+  devices each node publishes counted as capacity on the Allocation view.
 - **Correct attribution**: per pod when the exporter carries pod labels; per
   MIG slice on partitioned cards (rows grouped under their physical GPU); per
   process when workloads bypass the device plugin with
@@ -215,6 +222,11 @@ a MobX store that polls every 20 s while a GPU view is mounted.
   page.
 - Freelens must be able to reach the pod-proxy subresource with the RBAC of
   your kubeconfig; restricted tokens without `pods/proxy` cannot work.
+- DRA support reads the devices of NVIDIA's DRA driver (`gpu.nvidia.com`),
+  whose GPU allocation is not yet officially supported by NVIDIA (its
+  ComputeDomains are). dcgm-exporter cannot attribute dynamically created
+  MIG slices yet (NVIDIA/dcgm-exporter#714); the claim still shows which pod
+  holds them.
 - The idle history behind **Idle & waste** is kept in memory while Freelens
   is open; it starts again at every launch.
 - The extension targets the Freelens 1.x extension API. The port to the

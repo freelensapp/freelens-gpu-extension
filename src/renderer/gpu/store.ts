@@ -107,7 +107,21 @@ export class GpuStore {
    * polls for any pod only then, so opening pods on a cluster without GPUs does not start the scrape loop.
    */
   @computed get hasGpus(): boolean {
-    return (this.snapshot?.exporters.length ?? 0) > 0 || this.nodes.some((n) => n.capacity > 0 || n.allocatable > 0);
+    return (
+      (this.snapshot?.exporters.length ?? 0) > 0 ||
+      this.nodes.some((n) => n.capacity > 0 || n.allocatable > 0) ||
+      Object.keys(this.podState?.draDevicesByNode ?? {}).length > 0
+    );
+  }
+
+  /** GPU devices DRA publishes on a node (ResourceSlices); 0 without DRA. */
+  draDevicesOn(node: string): number {
+    return this.podState?.draDevicesByNode?.[node]?.count ?? 0;
+  }
+
+  /** What the last DRA read found, for the Exporters page. */
+  get draNote(): string {
+    return this.scraper.draNote;
   }
 
   get probes(): ProbeResult[] {
@@ -200,7 +214,7 @@ export class GpuStore {
     // Without a node list (RBAC, API error) every request would look unsatisfiable: give no hints rather than wrong ones.
     const canHint = nodes.length > 0 && !this.nodesError;
     return (this.podState?.pending ?? [])
-      .map((p) => ({ ...p, hints: canHint ? explainPending(p, nodes) : [] }))
+      .map((p) => ({ ...p, hints: [...(canHint ? explainPending(p, nodes) : []), ...(p.draHints ?? [])] }))
       .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
   }
 
@@ -237,6 +251,13 @@ export class GpuStore {
       a.allocatable = n.allocatable;
       a.unhealthy = Math.max(0, n.capacity - n.allocatable);
       a.migFree = migFree(n.gpuResources, this.podState?.requestedByNode[n.name]?.byResource ?? {});
+    }
+    // DRA nodes publish their GPUs in ResourceSlices, not in status.capacity: count them as capacity too.
+    for (const [node, d] of Object.entries(this.podState?.draDevicesByNode ?? {})) {
+      const a = ensure(node);
+      a.capacity += d.count;
+      a.allocatable += d.count;
+      a.gpuType ??= d.product;
     }
     for (const [node, r] of Object.entries(this.podState?.requestedByNode ?? {})) {
       const a = ensure(node);

@@ -1,7 +1,7 @@
 import { Renderer } from "@freelensapp/extensions";
 import { observer } from "mobx-react";
 import React from "react";
-import { podMayUseGpu } from "../gpu/presence";
+import { podMayUseGpu, podUsesClaims } from "../gpu/presence";
 import { scrapeStatus } from "../gpu/status";
 import { gpuStore } from "../gpu/store";
 import { GpuTable } from "./gpu-table";
@@ -19,7 +19,10 @@ type Props = Renderer.Component.KubeObjectDetailsProps<Renderer.K8sApi.Pod>;
 export const PodGpuDetails = observer(({ object: pod }: Props) => {
   // Poll only for a pod that can use a GPU, or on a cluster known to have GPUs (per-process exporters attribute pods
   // that request nothing); an ordinary pod on a cluster without GPUs must not start the scrape loop.
-  const poll = podMayUseGpu(pod.getContainers()) || gpuStore.hasGpus;
+  const poll =
+    podMayUseGpu(pod.getContainers()) ||
+    podUsesClaims(pod.spec as { resourceClaims?: unknown[] } | undefined) ||
+    gpuStore.hasGpus;
   React.useEffect(() => (poll ? gpuStore.subscribe() : undefined), [poll]);
   const rows = gpuStore.rowsForPod(pod.getNs(), pod.getName());
   if (rows.length === 0) return null;

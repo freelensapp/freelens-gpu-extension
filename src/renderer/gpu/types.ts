@@ -113,6 +113,8 @@ export interface PodState {
   requestedByNamespace: Record<string, GpuRequests>;
   /** Unscheduled pods that request a GPU resource. */
   pending: PendingGpuPod[];
+  /** GPU devices published in DRA ResourceSlices, by node; undefined when the cluster has no DRA. */
+  draDevicesByNode?: Record<string, { count: number; product?: string }>;
 }
 
 export interface HistoryPoint {

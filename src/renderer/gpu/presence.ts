@@ -5,6 +5,11 @@
 
 import { isGpuResourceName, usesGpuResource } from "./aggregate";
 
+/** A pod that references DRA claims (spec.resourceClaims): it may hold a GPU without any nvidia.com/gpu request. */
+export function podUsesClaims(spec: { resourceClaims?: unknown[] } | undefined): boolean {
+  return (spec?.resourceClaims?.length ?? 0) > 0;
+}
+
 interface ContainerLike {
   resources?: { limits?: unknown; requests?: unknown };
   env?: { name: string; value?: string }[];

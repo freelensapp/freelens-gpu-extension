@@ -101,7 +101,7 @@ export function reportMarkdown(r: ReportInput): string {
         ["Pod", "Requests", "Why / scheduler"],
         r.pending.map((p) => [
           `${p.namespace}/${p.pod}`,
-          Object.entries(p.requests)
+          Object.entries({ ...p.requests, ...p.draRequests })
             .map(([k, v]) => `${k.replace(/^nvidia\.com\//, "")}×${v}`)
             .join(", "),
           p.hints?.length ? p.hints.join(" ") : (p.message ?? p.reason ?? ""),

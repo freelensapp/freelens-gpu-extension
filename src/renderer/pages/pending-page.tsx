@@ -15,8 +15,10 @@ const fmtAge = (ms?: number) => {
   return `${(m / 1440).toFixed(0)} d`;
 };
 
+const allRequests = (r: PendingRow) => ({ ...r.requests, ...r.draRequests });
+
 const requestsText = (r: PendingRow) =>
-  Object.entries(r.requests)
+  Object.entries(allRequests(r))
     .map(([k, v]) => `${k.replace(/^nvidia\.com\//, "")} ×${v}`)
     .join(", ");
 
@@ -59,7 +61,7 @@ const PENDING_COLUMNS: Column<PendingRow>[] = [
     value: requestsText,
     render: (r) => (
       <>
-        {Object.entries(r.requests).map(([k, v]) => (
+        {Object.entries(allRequests(r)).map(([k, v]) => (
           <span key={k} className="gpuext-badge gpuext-mono">
             {k.replace(/^nvidia\.com\//, "")} ×{v}
           </span>
@@ -104,8 +106,8 @@ export const PendingPage = observer(({ extension }: { extension: Renderer.LensEx
       subtitle={
         <>
           Pending pods the scheduler has not placed that request a GPU resource (<code>nvidia.com/gpu</code>,{" "}
-          <code>nvidia.com/mig-*</code>). "Why" flags requests no node can ever satisfy; the scheduler message is shown
-          as-is. Refreshed with discovery (every 60 s).
+          <code>nvidia.com/mig-*</code>) or a GPU through a DRA claim. "Why" flags requests no node can ever satisfy;
+          the scheduler message is shown as-is. Refreshed with discovery (every 60 s).
           {rows.length > 0 && (
             <>
               {" "}

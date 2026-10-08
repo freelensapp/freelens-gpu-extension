@@ -1,0 +1,153 @@
+{
+  "kind": "ResourceClaimList",
+  "apiVersion": "resource.k8s.io/v1",
+  "items": [
+    {
+      "metadata": {
+        "name": "eight-gpus",
+        "namespace": "dra-ml"
+      },
+      "spec": {
+        "devices": {
+          "requests": [
+            {
+              "name": "gpus",
+              "exactly": {
+                "deviceClassName": "gpu.nvidia.com",
+                "allocationMode": "ExactCount",
+                "count": 8
+              }
+            }
+          ]
+        }
+      },
+      "status": {}
+    },
+    {
+      "metadata": {
+        "name": "notebook-0-slice-k7nxb",
+        "generateName": "notebook-0-slice-",
+        "namespace": "dra-ml",
+        "ownerReferences": [
+          {
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "name": "notebook-0"
+          }
+        ],
+        "finalizers": ["resource.kubernetes.io/delete-protection"]
+      },
+      "spec": {
+        "devices": {
+          "requests": [
+            {
+              "name": "slice",
+              "exactly": {
+                "deviceClassName": "mig.nvidia.com",
+                "allocationMode": "ExactCount",
+                "count": 1
+              }
+            }
+          ]
+        }
+      },
+      "status": {
+        "allocation": {
+          "devices": {
+            "results": [
+              {
+                "request": "slice",
+                "driver": "gpu.nvidia.com",
+                "pool": "dra-test-control-plane",
+                "device": "gpu-2-mig-1g10gb-19-0"
+              }
+            ]
+          },
+          "nodeSelector": {
+            "nodeSelectorTerms": [
+              {
+                "matchFields": [
+                  {
+                    "key": "metadata.name",
+                    "operator": "In",
+                    "values": ["dra-test-control-plane"]
+                  }
+                ]
+              }
+            ]
+          },
+          "allocationTimestamp": "2026-10-06T08:44:19Z"
+        },
+        "reservedFor": [
+          {
+            "resource": "pods",
+            "name": "notebook-0"
+          }
+        ]
+      }
+    },
+    {
+      "metadata": {
+        "name": "trainer-0-gpu-tqn26",
+        "generateName": "trainer-0-gpu-",
+        "namespace": "dra-ml",
+        "ownerReferences": [
+          {
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "name": "trainer-0"
+          }
+        ],
+        "finalizers": ["resource.kubernetes.io/delete-protection"]
+      },
+      "spec": {
+        "devices": {
+          "requests": [
+            {
+              "name": "gpu",
+              "exactly": {
+                "deviceClassName": "gpu.nvidia.com",
+                "allocationMode": "ExactCount",
+                "count": 1
+              }
+            }
+          ]
+        }
+      },
+      "status": {
+        "allocation": {
+          "devices": {
+            "results": [
+              {
+                "request": "gpu",
+                "driver": "gpu.nvidia.com",
+                "pool": "dra-test-control-plane",
+                "device": "gpu-0"
+              }
+            ]
+          },
+          "nodeSelector": {
+            "nodeSelectorTerms": [
+              {
+                "matchFields": [
+                  {
+                    "key": "metadata.name",
+                    "operator": "In",
+                    "values": ["dra-test-control-plane"]
+                  }
+                ]
+              }
+            ]
+          },
+          "allocationTimestamp": "2026-10-06T08:44:19Z"
+        },
+        "reservedFor": [
+          {
+            "resource": "pods",
+            "name": "trainer-0"
+          }
+        ]
+      }
+    }
+  ]
+}
