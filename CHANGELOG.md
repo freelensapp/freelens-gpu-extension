@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.0
 
 - GPUs allocated with Dynamic Resource Allocation (`resource.k8s.io`, NVIDIA's DRA driver `gpu.nvidia.com`): pods
   that hold a GPU or a MIG slice through a `ResourceClaim` instead of `nvidia.com/gpu` count for their pod, namespace
