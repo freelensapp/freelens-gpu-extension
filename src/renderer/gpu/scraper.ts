@@ -7,7 +7,8 @@
  * families it emits. Nothing is installed in the cluster.
  *
  * All requests go through Freelens' own cluster connection
- * (KubeJsonApi.forCluster), so they carry whatever auth the kubeconfig has.
+ * (KubeJsonApi.forCluster, see kubeGet), so they carry whatever auth the
+ * kubeconfig has.
  */
 
 import { Common, Renderer } from "@freelensapp/extensions";
@@ -190,7 +191,28 @@ export interface ScraperDeps {
   fetchDra?: (clusterId: string, path: string) => Promise<string>;
 }
 
-const defaultDeps: ScraperDeps = {
+/**
+ * GET of a kube-apiserver path through Freelens' connection to the cluster.
+ *
+ * KubeJsonApi.forCluster(clusterId) is the path in use: its getResponse hands
+ * back the response as it is, so a non-2xx answer becomes the `HTTP <code>`
+ * error the probes classify, and the body is never parsed as JSON (/metrics is
+ * text). The host's proxy authenticates the request by its authority and adds
+ * the kubeconfig's credentials.
+ *
+ * The /api-kube request through Renderer.Util.fetch is only for a host that
+ * does not provide forCluster: inside a cluster frame the window origin is the
+ * proxy for that cluster, and /api-kube/* goes to its kube-apiserver.
+ */
+function kubeGet(clusterId: string, path: string, signal: AbortSignal) {
+  const forCluster = (Renderer.K8sApi.KubeJsonApi as { forCluster?: unknown }).forCluster;
+  if (typeof forCluster === "function") {
+    return Renderer.K8sApi.KubeJsonApi.forCluster(clusterId).getResponse(path, undefined, { signal });
+  }
+  return Renderer.Util.fetch(`/api-kube${path}`, { signal });
+}
+
+export const defaultDeps: ScraperDeps = {
   clusterId: () => Renderer.Catalog.getActiveCluster()?.id ?? Renderer.Catalog.activeCluster.get()?.getId(),
   listPods: async () => (await Renderer.K8sApi.podsApi.list()) ?? [],
   listServices: async () =>
@@ -203,25 +225,8 @@ const defaultDeps: ScraperDeps = {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
-      // Inside a cluster frame the window origin IS the Lens proxy for this
-      // cluster, and /api-kube/* is forwarded to the kube-apiserver with the
-      // kubeconfig's auth. This is the path Freelens itself uses.
-      //
-      // The typed KubeJsonApi.forCluster(clusterId) is only used when the
-      // running Freelens actually provides it (1.10.3 declares it in the
-      // typings but not at runtime).
-      const forCluster = (Renderer.K8sApi.KubeJsonApi as unknown as { forCluster?: unknown }).forCluster;
-      if (typeof forCluster === "function") {
-        try {
-          const api = Renderer.K8sApi.KubeJsonApi.forCluster(clusterId);
-          const body = await api.get<unknown>(path, undefined, { signal: ctrl.signal });
-          return typeof body === "string" ? body : JSON.stringify(body);
-        } catch (e) {
-          log.warn(`KubeJsonApi.forCluster GET ${path} failed, falling back to /api-kube: ${describe(e)}`);
-        }
-      }
-      const res = await fetch(`/api-kube${path}`, { signal: ctrl.signal, credentials: "include" });
-      if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText} for /api-kube${path}`);
+      const res = await kubeGet(clusterId, path, ctrl.signal);
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText} for ${path}`);
       return await res.text();
     } finally {
       clearTimeout(t);

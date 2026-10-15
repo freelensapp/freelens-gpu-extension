@@ -13,7 +13,7 @@ the GUI counterpart of `kubectl-gpugo` and shares its attribution rules, so both
 show the same numbers.
 
 - **Language**: TypeScript 7.x
-- **Runtime**: Node.js >= 22.0.0, Freelens >= 1.8.0
+- **Runtime**: Node.js >= 24.0.0, Freelens >= 2.0.0 (extension API v2)
 - **Package manager**: pnpm 12.x (locked)
 - **License**: MIT
 - **npm package**: `@freelensapp/gpu-extension`
@@ -22,31 +22,35 @@ show the same numbers.
 
 ```bash
 # Type checking
-pnpm type:check
+pnpm type:check                # All of the programs below, in this order
+pnpm type:check:sources        # main and renderer, each with src/common/
+pnpm type:check:tests          # Tests and test support
+pnpm type:check:tooling        # Vite and Vitest configs, build plugins
+pnpm type:check:environments   # Environment tests
 
 # Linting & formatting
-pnpm biome:check          # TypeScript/TSX, JS, JSON (biome)
+pnpm biome:check          # TypeScript/TSX, JS, JSON, CSS, HTML (biome)
 pnpm biome:fix            # Auto-fix the formats above
-pnpm trunk:check          # Markdown, YAML, TOML, and other formats not covered by biome
+pnpm trunk:check          # Markdown, YAML, TOML, SCSS, workflows, and Biome again (changed files)
 pnpm trunk:fix            # Auto-fix Markdown, YAML, etc.
 pnpm lint:check           # Alias for biome:check
 pnpm lint:fix             # Alias for biome:fix
-pnpm knip:check           # Unused files, exports and dependencies
+pnpm knip:check           # Unused files, unused and unlisted dependencies (knip)
 
 # Tests
-pnpm test:unit            # vitest, src/renderer/gpu/__tests__/*.test.ts with the .prom fixtures
+pnpm test:unit            # vitest, src/**/*.test.ts(x), with the .prom fixtures
 
 # Build
-pnpm build                # Type check + electron-vite + Main bundle smoke test
-pnpm build:production     # Production build (no preserveModules)
-pnpm smoke:main           # Load the built Main bundle with host globals stubbed
+pnpm build                # Both Vite runs, without the type check
+pnpm dev                  # Both Vite runs in watch mode, for a directory install
 
 # Pack for testing
 pnpm pack:dev             # Bump prerelease version, build, and create .tgz for install in Freelens app
 
 # Clean
-pnpm clean                # Clean out/
-pnpm clean:all            # Clean everything (node_modules, out, tgz)
+pnpm clean                # Clean dist/
+pnpm clean:dts            # Remove generated *.d.scss.ts files
+pnpm clean:all            # Clean everything (dist, dts, node_modules, tgz)
 ```
 
 ## Architecture
@@ -63,12 +67,23 @@ src/
                            # aggregate (attribution rules), store (MobX, polling, history, derived
                            # views), inference, namespaces, pending, report, targets, xid, types
   renderer/gpu/__tests__/  # Unit tests and the .prom fixtures (real or reconstructed captures)
-  renderer/components/     # DataGrid (CSS grid), PageShell, GPU table, drawer sections, styles
+  renderer/components/     # DataGrid (CSS grid), PageShell, GPU table, drawer sections, ErrorBoundary, ErrorPage
   renderer/pages/          # Pods, Namespaces, Inference, GPUs, Idle & waste, Allocation, Pending, Exporters
+  renderer/styles.scss     # The gpuext-* classes, compiled into dist/renderer.css
+  common/                  # Empty: code shared by main and renderer would go here
+test/freelens-extensions.ts # Runtime stub of @freelensapp/extensions for Vitest
+environment-tests/         # Probes for the per-environment TypeScript programs
+build/                     # Vite plugins: host modules, standard decorators, CSS module declarations
 integration/               # Playwright tests and the fake GPU fixture run inside Freelens by CI
 ```
 
-Build output goes to `out/`.
+Build output goes to `dist/`: `main.js`, `renderer.js` and `renderer.css`, with
+source maps.
+
+The build, the TypeScript programs, the test stub and the lint setup are those of
+[freelens-example-extension](https://github.com/freelensapp/freelens-example-extension),
+the reference template of the v2 extension API; its `AGENTS.md` explains each of them,
+and its "Rules That Fail Silently" apply here.
 
 ### Ground rules
 
@@ -83,30 +98,34 @@ Build output goes to `out/`.
   tests under `src/renderer/gpu/__tests__/`. The impure edge (pod listing, pod-proxy fetch)
   is behind `ScraperDeps` so tests inject fakes.
 - **Host CSS is hostile to `<table>`.** Use `DataGrid` (CSS grid) for tabular UI.
-- **Runtime API over typings.** Freelens 1.10.3 declares APIs it does not ship
+- **Runtime API over typings.** Freelens 1.x declared APIs it did not ship
   (`KubeJsonApi.forCluster`). Probe for existence before relying on a new host API.
+- **Every details panel inside an error boundary.** `kubeObjectDetailItems` in
+  `src/renderer/index.tsx` is mapped through `withDetailsErrorBoundary`; details panels are
+  registered with `Renderer.K8sApi.detailsFor` and the host's `Pod` and `Node` classes.
+  Cluster pages get no boundary of the extension: the host wraps each of them in its own
+  ("App crash at `<path>`", with the stacks and a Back button), which is richer.
+- **Standard decorators.** An observable field of `GpuStore` is `@observable accessor` or
+  `@observableRef accessor`, and the class does not call `makeObservable(this)`.
+  `src/renderer/gpu/__tests__/store.test.ts` fails otherwise.
 - **No credentials.** The extension never reads Secrets or database credentials; user input
   (pinned targets) is validated with a regular expression before it reaches a URL path.
 
 ## Key Dependencies (provided by Freelens host at runtime)
 
-These are NOT bundled, they come from the Freelens host as globals
-(`build/global-externals.js`):
-
-- `@freelensapp/extensions` → `global.LensExtensions`
-- `mobx` → `global.Mobx`
-- `mobx-react` → `global.MobxReact`
-- `react` → `global.React`
-- `react-dom` → `global.ReactDom`
-- `react-router-dom` → `global.ReactRouterDom`
+`react`, `react-dom`, `react/jsx-runtime`, `mobx` and `mobx-react` come from the host, on
+`globalThis.FreelensExtensionApi`: `build/vite-plugin-host-modules.mjs` maps their bare
+imports onto it, and fails the build on a host module the process does not publish. They
+are devDependencies pinned to the host's versions, for types and tests only.
+`@freelensapp/extensions` is a shim that reads the same global and is bundled.
 
 Everything else is bundled into the extension output. `dependencies` stays empty: every
 bundled package is a devDependency.
 
 ## Code Style
 
-- **Biome** formats **TypeScript/TSX, JS, JSON**: double quotes, semicolons, trailing commas, 2-space indent, 120 char line width — use `pnpm biome:fix`
-- **Trunk** formats **Markdown, YAML**, and other formats not covered by biome — use `pnpm trunk:fix`
+- **Biome** formats **TypeScript/TSX, JS, JSON, CSS, HTML**: double quotes, semicolons, trailing commas, 2-space indent, 120 char line width — use `pnpm biome:fix`
+- **Trunk** formats **Markdown, YAML, SCSS** (with Prettier), and other formats not covered by biome — use `pnpm trunk:fix`
 - Import order (enforced by biome organizeImports): built-in modules → `@freelensapp/**` → packages → relative paths
 - Keep the data layer pure where possible and colocate tests under `src/renderer/gpu/__tests__/`
 - Plain, descriptive commit messages and PR titles, without Conventional Commits prefixes
@@ -141,7 +160,7 @@ Extensions run in the same multi-process model as the Freelens host:
 - **Main process** (`src/main/`) — Node.js environment; empty in this extension, kept because Freelens loads both entry points
 - **Renderer process** (`src/renderer/`) — Chromium browser, UI components and the whole data layer
 
-The renderer talks to the cluster only through the Freelens proxy (`/api-kube/...`), with the
+The renderer talks to the cluster only through the Freelens proxy (`KubeJsonApi.forCluster`), with the
 kubeconfig credentials of the connected cluster.
 
 ## Testing
@@ -150,7 +169,8 @@ kubeconfig credentials of the connected cluster.
   `src/renderer/gpu/__tests__/fixtures/` (dcgm-exporter with and without pod labels, MIG, a
   per-process enricher, a vLLM server, a redacted DGX A100 capture). Every change to parsing,
   attribution or derived views ships with unit tests.
-- **Bundle smoke** (`pnpm smoke:main`, part of `pnpm build`): loads the built Main bundle with host globals stubbed.
+- **Type check per environment** (`pnpm type:check`): main, renderer, tests, tooling and the environment probes, each
+  its own program, so a Node API in renderer code fails the check.
 - **Integration inside Freelens** (`integration/__tests__/`): Playwright tests run by CI inside a
   packaged Freelens on a two-node kind cluster, with the fake GPU fixture from
   `integration/fixtures/gpu/` (fake capacity on the nodes, busybox exporters serving the unit-test
@@ -164,8 +184,8 @@ Run unit tests, type check and lint before opening a pull request. For UI change
 
 ### Changes Not Appearing
 
-1. Check that files are not in ignored output directories (`out/`, `dist/`, `node_modules/`)
-2. Full clean and rebuild: `pnpm clean:all && pnpm build`
+1. Check that files are not in ignored output directories (`dist/`, `node_modules/`)
+2. Full clean and rebuild: `pnpm clean:all && pnpm install && pnpm build`
 3. Reinstall the extension in Freelens and fully restart it: the old renderer bundle stays in memory otherwise (the version badge in the page title tells which one is loaded)
 
 ### Build Failures
@@ -181,7 +201,7 @@ Run unit tests, type check and lint before opening a pull request. For UI change
 2. Check the terminal where Freelens was launched for main process errors
 3. Look for stack traces with file:line numbers
 4. `Exporters found, but no GPU metrics were returned`: the exporter answers on the probed port but its body has no DCGM or per-process families; check the Exporters view for the last probes and their outcome
-5. Validate both with `pnpm type:check` **and** `pnpm build` — runtime failures can appear only in bundled `out/` code
+5. Validate both with `pnpm type:check` **and** `pnpm build` — runtime failures can appear only in bundled `dist/` code
 
 ## Best Practices
 

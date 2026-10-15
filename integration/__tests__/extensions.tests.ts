@@ -7,7 +7,9 @@
 // Runs inside the Freelens repository (copied there by integration-tests.yaml),
 // so the helpers come from freelens/integration/helpers.
 
-import { afterAll, beforeAll, describe, expect, it } from "@jest/globals";
+import { spawnSync } from "node:child_process";
+import { describeIf } from "@freelensapp/test-utils";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { kindReady } from "../helpers/kind";
 import * as utils from "../helpers/utils";
 
@@ -108,22 +110,20 @@ async function installExtension(app: ElectronApplication, window: Page): Promise
       ?.click();
   });
 
-  const textbox = window.getByPlaceholder("Name or file path or URL");
+  // Trigger extension install: the packed tarball from the workflow, or the
+  // published package when the test runs without one.
   console.log("await textbox.fill");
-  await textbox.fill(process.env.EXTENSION_PATH || EXTENSION_NAME);
-  const installButtonSelector = 'button[class*="Button install-module__button--"]';
-  console.log("await window.click [data-waiting=false]");
-  await window.click(installButtonSelector.concat("[data-waiting=false]"));
+  await window
+    .getByPlaceholder("Name, URL, or path to a package or directory")
+    .fill(process.env.EXTENSION_PATH || EXTENSION_NAME);
+  console.log("await install button click");
+  await window.getByRole("button", { name: "Install", exact: true }).click();
 
-  console.log('await window.waitForSelector div[class*="installed-extensions-module__extensionName--"]');
-  const installedExtensionName = await (
-    await window.waitForSelector('div[class*="installed-extensions-module__extensionName--"]', { timeout: 120_000 })
-  ).textContent();
-  expect(installedExtensionName).toBe(EXTENSION_NAME);
-  const installedExtensionState = await (
-    await window.waitForSelector('div[class*="installed-extensions-module__enabled--"]', { timeout: 120_000 })
-  ).textContent();
-  expect(installedExtensionState).toBe("Enabled");
+  // Expect the extension to be listed and enabled. The status column reads
+  // "Incompatible" if the host refuses `engines.freelens`.
+  console.log("await extensions table row");
+  const row = window.getByTestId("extensions-table").locator("tbody tr", { hasText: EXTENSION_NAME });
+  await row.locator("td").nth(2).getByText("Enabled", { exact: true }).waitFor({ timeout: 120_000 });
 
   // Dismiss notifications so one still in its enter animation does not
   // intercept pointer events on the elements behind it.
@@ -174,9 +174,36 @@ describe("extensions page tests", () => {
   );
 });
 
-// The cluster tests need a kind cluster with the fixture from
-// integration/fixtures/gpu applied (integration-tests.yaml does both).
-const clusterDescribe = kindReady(TEST_KIND_CLUSTER_NAME, TEST_NAMESPACE) ? describe : describe.skip;
+/**
+ * Whether the cluster tests can run: the kind cluster, with the fixture from
+ * integration/fixtures/gpu applied (integration-tests.yaml does both), is
+ * running and reachable. Outside CI they skip with a warning otherwise; in CI
+ * the run fails, so that a mistake in the workflow does not turn into a silent
+ * skip. After freelens-example-extension.
+ */
+function clusterReady(): boolean {
+  let reason: string | undefined;
+
+  if (!kindReady(TEST_KIND_CLUSTER_NAME, TEST_NAMESPACE)) {
+    reason = `the kind cluster ${TEST_KIND_CLUSTER_NAME} is not running`;
+  } else if (
+    spawnSync("kubectl", ["--context", `kind-${TEST_KIND_CLUSTER_NAME}`, "get", "--raw", "/readyz"]).status !== 0
+  ) {
+    reason = `the kind cluster ${TEST_KIND_CLUSTER_NAME} is not reachable`;
+  }
+
+  if (!reason) {
+    return true;
+  }
+
+  if (process.env.CI) {
+    throw new Error(`Cannot run the cluster tests: ${reason}`);
+  }
+
+  console.warn(`Skipping the cluster tests: ${reason}`);
+
+  return false;
+}
 
 const flat = (text: string) => text.replace(/\s+/g, " ").trim();
 
@@ -191,8 +218,7 @@ async function launchKindClusterFromCatalog(window: Page): Promise<Frame> {
   return utils.launchKindClusterFromCatalog(TEST_KIND_CLUSTER_NAME, window);
 }
 
-// Freelens 1.10.3, the version the workflow builds, has no clickSidebarItem
-// helper: open the GPU group first when the child entry is collapsed.
+// Open the GPU group first when the child entry is collapsed.
 async function openGpuMenuItem(frame: Frame, menuId: string): Promise<void> {
   const item = frame.locator(`[data-testid="link-for-sidebar-item-${EXTENSION_ID}-${menuId}"]`);
   if (!(await item.isVisible())) {
@@ -216,6 +242,9 @@ async function waitForRows(frame: Frame, min: number, timeout = 120_000): Promis
   return (await frame.locator(ROW_SELECTOR).allInnerTexts()).map(flat);
 }
 
+// The class of ErrorPage, as CSS modules name it in the bundle.
+const ERROR_PAGE_SELECTOR = '[class*="_errorPage_"]';
+
 async function waitForPageText(frame: Frame, pattern: RegExp, timeout = 120_000): Promise<string> {
   const deadline = Date.now() + timeout;
   let text = "";
@@ -228,7 +257,7 @@ async function waitForPageText(frame: Frame, pattern: RegExp, timeout = 120_000)
   return text;
 }
 
-clusterDescribe("GPU cluster pages", () => {
+describeIf(clusterReady())("GPU cluster pages", () => {
   let window: Page;
   let cleanup: undefined | (() => Promise<void>);
   let frame: Frame;
@@ -267,7 +296,7 @@ clusterDescribe("GPU cluster pages", () => {
       const entries = (
         await frame.locator(`[data-testid^="link-for-sidebar-item-${EXTENSION_ID}-gpu-"]`).allInnerTexts()
       ).map(flat);
-      // jest expect, not the Playwright one: read the values and assert on them.
+      // Vitest expect, not the Playwright one: read the values and assert on them.
       expect(GPU_VIEWS.filter((view) => !entries.some((entry) => entry.includes(view)))).toEqual([]);
     },
     5 * 60 * 1000,
@@ -287,6 +316,63 @@ clusterDescribe("GPU cluster pages", () => {
       // One pod from the whole-GPU exporter and one from the MIG exporter.
       expect(rows.some((row) => row.includes("tei-7d9f-x1"))).toBe(true);
       expect(rows.some((row) => row.includes("transcription-0"))).toBe(true);
+    },
+    5 * 60 * 1000,
+  );
+
+  it(
+    "opens the GPU section of the Pod drawer from a pod link",
+    async () => {
+      console.log("await openGpuMenuItem gpu-pods");
+      await openGpuMenuItem(frame, "gpu-pods");
+      await waitForRows(frame, 6);
+
+      await frame.locator(`${ROW_SELECTOR} button.gpuext-link`, { hasText: "tei-7d9f-x1" }).first().click();
+      const details = frame.locator(".KubeObjectDetails");
+      const section = details.locator(".gpuext-details");
+      await section.waitFor({ state: "visible", timeout: 60_000 });
+
+      const rows = (await section.locator(".gpuext-row:not(.gpuext-head)").allInnerTexts()).map(flat);
+      // The compact table of the drawer has no pod column: the drawer is the pod's.
+      expect(rows.length).toBeGreaterThan(0);
+      // The application XID on the card of tei, from dcgm-xid-extra.prom.
+      expect(flat(await section.innerText())).toMatch(/XID/);
+      expect(await details.locator(ERROR_PAGE_SELECTOR).count()).toBe(0);
+
+      await window.keyboard.press("Escape");
+      await details.waitFor({ state: "hidden", timeout: 30_000 }).catch(() => {});
+    },
+    5 * 60 * 1000,
+  );
+
+  it(
+    "sums the GPU pods per namespace on the Namespaces view, waiting pods included",
+    async () => {
+      console.log("await openGpuMenuItem gpu-namespaces");
+      await openGpuMenuItem(frame, "gpu-namespaces");
+
+      // ml, embeddings, it-dgx1, it-dgx2 hold GPUs; research only has the pod
+      // that waits for a slice.
+      const rows = await waitForRows(frame, 5);
+      const names = rows.map((row) => row.split(" ")[0]);
+      expect([...names].sort()).toEqual(["embeddings", "it-dgx1", "it-dgx2", "ml", "research"]);
+      expect(await frame.locator(`.gpuext-page ${ERROR_PAGE_SELECTOR}`).count()).toBe(0);
+    },
+    5 * 60 * 1000,
+  );
+
+  it(
+    "renders the Idle & waste view, with no idle holder in the fixture",
+    async () => {
+      console.log("await openGpuMenuItem gpu-idle");
+      await openGpuMenuItem(frame, "gpu-idle");
+
+      // Every fixture pod is at 5% or more, the idle threshold, so the view
+      // shows its empty text once the first scrape is in.
+      const text = await waitForPageText(frame, /No idle GPU holders right now\./);
+      expect(text).toMatch(/Idle GPU holders/);
+      expect(text).toMatch(/No idle GPU holders right now\./);
+      expect(await frame.locator(`.gpuext-page ${ERROR_PAGE_SELECTOR}`).count()).toBe(0);
     },
     5 * 60 * 1000,
   );

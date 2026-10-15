@@ -6,7 +6,7 @@
  */
 
 import { Renderer } from "@freelensapp/extensions";
-import { action, computed, makeObservable, observable, runInAction } from "mobx";
+import { action, computed, observable, observableRef, runInAction } from "mobx";
 import {
   attributedPower,
   devicePowerShares,
@@ -57,32 +57,30 @@ export interface PendingRow extends PendingGpuPod {
 }
 
 export class GpuStore {
-  @observable.ref snapshot: Snapshot | undefined = undefined;
+  @observableRef accessor snapshot: Snapshot | undefined = undefined;
   /** Pinned exporter / Prometheus targets for the active cluster (persisted per cluster in localStorage). */
-  @observable.ref pins: Target[] = [];
+  @observableRef accessor pins: Target[] = [];
   private pinsLoadedFor: string | undefined;
   /** Inference servers (vLLM) scraped on every refresh, with rates against the previous scrape. */
-  @observable.ref inference: { scrape: InferenceScrape; rates: VllmRates }[] = [];
+  @observableRef accessor inference: { scrape: InferenceScrape; rates: VllmRates }[] = [];
   private inferencePrev = new Map<string, { at: number; sample: VllmSample }>();
   /** Pod-list state; updated even when the metrics snapshot fails (no exporter, scrape errors). */
-  @observable.ref podState: PodState | undefined = undefined;
-  @observable error: string | undefined = undefined;
-  @observable loading = false;
-  @observable.ref nodes: NodeInfo[] = [];
-  @observable nodesError: string | undefined = undefined;
+  @observableRef accessor podState: PodState | undefined = undefined;
+  @observable accessor error: string | undefined = undefined;
+  @observable accessor loading = false;
+  @observableRef accessor nodes: NodeInfo[] = [];
+  @observable accessor nodesError: string | undefined = undefined;
   /** When the node list was last requested; nodes change rarely, so they follow the discovery cadence. */
   private nodesLoadedAt = 0;
   /** Rolling per-pod history, keyed "ns/pod". Bumped via historyVersion for observers. */
   readonly history = new Map<string, HistoryPoint[]>();
-  @observable historyVersion = 0;
+  @observable accessor historyVersion = 0;
 
   private timer: ReturnType<typeof setInterval> | undefined;
   private inflight: Promise<void> | undefined;
   private subscribers = 0;
 
-  constructor(readonly scraper = new GpuScraper()) {
-    makeObservable(this);
-  }
+  constructor(readonly scraper = new GpuScraper()) {}
 
   @computed get rows(): PodGPU[] {
     if (!this.snapshot) return [];

@@ -25,7 +25,7 @@ like `*dcgm-exporter*` that serves one of those files at `/metrics` works too.
   `src/renderer/gpu/__tests__/`. The impure edge (pod listing, pod-proxy fetch) is behind `ScraperDeps` so tests inject
   fakes.
 - **Host CSS is hostile to `<table>`.** Use `DataGrid` (CSS grid) for tabular UI.
-- **Runtime API over typings.** Freelens 1.10.3 declares APIs it does not ship (`KubeJsonApi.forCluster`). Probe for
+- **Runtime API over typings.** Freelens 1.x declared APIs it did not ship (`KubeJsonApi.forCluster`). Probe for
   existence before relying on a new host API.
 
 ## Pull requests

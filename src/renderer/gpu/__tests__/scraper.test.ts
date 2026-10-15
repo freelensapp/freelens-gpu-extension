@@ -315,7 +315,7 @@ describe("inference probe caching", () => {
         listServices: async () => [],
         fetchText: async (_c, path) => {
           calls.push(path);
-          throw new Error(path.includes("flaky") ? "connect ECONNREFUSED" : "HTTP 404 Not Found for /api-kube/...");
+          throw new Error(path.includes("flaky") ? "connect ECONNREFUSED" : "HTTP 404 Not Found for /api/v1/...");
         },
       });
       const probedAt = async (min: number) => {
@@ -548,7 +548,7 @@ describe("GpuScraper with DRA", () => {
     const tried: string[] = [];
     const s = scraper(async (_c, path) => {
       tried.push(path.split("/")[3]);
-      throw new Error(`HTTP 404 Not Found for /api-kube${path}`);
+      throw new Error(`HTTP 404 Not Found for ${path}`);
     });
     await expect(s.snapshot()).rejects.toThrow(/No GPU metrics exporter found/);
     expect([...new Set(tried)]).toEqual(["v1", "v1beta2", "v1beta1"]);
@@ -562,7 +562,7 @@ describe("GpuScraper with DRA", () => {
     let calls = 0;
     const s = scraper(async () => {
       calls++;
-      throw new Error("HTTP 403 Forbidden for /api-kube/apis/resource.k8s.io/v1/resourceslices");
+      throw new Error("HTTP 403 Forbidden for /apis/resource.k8s.io/v1/resourceslices");
     });
     await expect(s.snapshot()).rejects.toThrow();
     expect(calls).toBe(2); // slices and claims of v1, in parallel
