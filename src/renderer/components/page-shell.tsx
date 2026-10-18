@@ -4,7 +4,6 @@ import React from "react";
 import { reportJson, reportMarkdown } from "../gpu/report";
 import { scrapeStatus } from "../gpu/status";
 import { gpuStore } from "../gpu/store";
-import { gpuStyles } from "./styles";
 
 const { Button, Spinner } = Renderer.Component;
 
@@ -70,7 +69,6 @@ export const PageShell = observer(({ extension, title, subtitle, children, podOn
   const dim = status.stale && (dimWhenStale ?? !podOnly);
   return (
     <div className="gpuext-page">
-      <style>{gpuStyles}</style>
       <div className="gpuext-header">
         <h2>
           {title} <span className="gpuext-version">v{extension.version}</span>

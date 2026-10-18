@@ -1,15 +1,19 @@
-# pnpm 11+: allowBuilds replaces onlyBuiltDependencies (same approvals as before)
 allowBuilds:
   '@parcel/watcher': true
   electron: true
-  esbuild: true
-  node-pty: true
-  playwright: true
+  esbuild: false
+
+engineStrict: true
+
+# pnpm holds back any version younger than minimumReleaseAge (1 day by
+# default). @freelensapp/extensions is pinned exactly to a nightly that is
+# often published on the day it is adopted.
+minimumReleaseAgeExclude:
+  - '@freelensapp/extensions'
 
 shellEmulator: true
 
-# Dev-only transitive deps of @freelensapp/core (types only; the host app supplies it at runtime).
-# Pinned past their advisories so Dependabot stays clean.
-overrides:
-  dompurify: ^3.4.16
-  decode-uri-component: ^0.5.0
+# Fail the install, instead of printing one warning line, when a library the
+# extension shares with the host is outside the peer range of
+# @freelensapp/extensions.
+strictPeerDependencies: true

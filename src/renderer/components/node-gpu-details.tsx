@@ -6,7 +6,7 @@ import { nodeAdvertisesGpu } from "../gpu/presence";
 import { scrapeStatus } from "../gpu/status";
 import { gpuStore } from "../gpu/store";
 import { GpuTable } from "./gpu-table";
-import { fmtMiB, gpuStyles } from "./styles";
+import { fmtMiB } from "./styles";
 
 const { DrawerTitle } = Renderer.Component;
 
@@ -26,7 +26,6 @@ export const NodeGpuDetails = observer(({ object: node }: Props) => {
   const status = scrapeStatus(gpuStore.snapshot, gpuStore.error, false);
   return (
     <div className="gpuext-details">
-      <style>{gpuStyles}</style>
       <DrawerTitle>
         GPU {(() => {
           const withdrawn = gpuStore.allocation.find((a) => a.node === node.getName())?.unhealthy ?? 0;
