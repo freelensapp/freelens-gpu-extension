@@ -47,10 +47,7 @@ are blacked out.
 ## Requirements
 
 - **Freelens >= 2.0.0.** The extension targets the Freelens v2 extension
-  API; the integration tests run against Freelens `main` until v2 is
-  released. Freelens 1.x users stay on 0.9.x: the v2 build is 1.0.0, and
-  its prereleases are published under the npm `next` tag until Freelens
-  2.0.0 is out, so installing by name from Freelens 1.x keeps getting 0.9.x.
+  API, from 1.0.0 on. Freelens 1.x users stay on 0.9.x.
 - **An exporter the extension recognises**, running in the cluster:
   - **dcgm-exporter**: image contains `dcgm-exporter`, or `/metrics` emits
     `DCGM_FI_DEV_*`. Per-pod attribution needs `--kubernetes` (the GPU

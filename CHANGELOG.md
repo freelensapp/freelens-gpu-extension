@@ -1,13 +1,14 @@
 # Changelog
 
-## Unreleased
+## 1.0.0
 
 - Ported to the Freelens v2 extension API: the extension needs Freelens 2.0.0 or newer (`engines.freelens: ^2.0.0`),
-  and 0.9.x stays the release for Freelens 1.x. A major version for that reason: 1.0.0 comes out with Freelens 2.0.0,
-  and until then the `1.0.0-N` prereleases go to the npm `next` tag, so `latest` keeps serving Freelens 1.x. The views and their numbers are unchanged. Under the hood: ESM bundles
-  in `dist/` built with Vite after freelens-example-extension, the host's React 19 and mobx 7, standard MobX
-  decorators, the stylesheet as `dist/renderer.css`, error boundaries around the drawer sections, and one
-  TypeScript program per runtime environment.
+  and 0.9.x stays the release for Freelens 1.x. A major version for that reason. The views and their numbers are
+  unchanged. Under the hood: ESM bundles in `dist/` built with Vite after freelens-example-extension, the host's
+  React 19 and mobx 7, standard MobX decorators, the stylesheet as `dist/renderer.css`, error boundaries around the
+  drawer sections, and one TypeScript program per runtime environment.
+- Built against `@freelensapp/extensions` 2.0.0 with the stack of Freelens 2.0.0 (electron 44.10.0); the
+  integration tests run against the Freelens `v2.0.0` tag.
 
 ## 0.9.0
 
