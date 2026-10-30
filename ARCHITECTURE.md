@@ -14,7 +14,7 @@ is the kube-apiserver itself, reached through Freelens' proxy, so the renderer c
 
 ```text
 podsApi.list()  ──▶ candidates (Running, name/image/labels ∋ dcgm|gpu|nvidia|cuda, metrics port)
-                        │  fetch(`/api-kube/api/v1/namespaces/<ns>/pods/<pod>:<port>/proxy/metrics`)
+                        │  KubeJsonApi.forCluster(id).getResponse(`/api/v1/namespaces/<ns>/pods/<pod>:<port>/proxy/metrics`)
                         ▼
                 classifyMetrics(body) ──▶ ExporterPod{kind: dcgm | enricher}     (cached 60 s)
                         │
@@ -53,33 +53,31 @@ the container hostname (the exporter pod name) unless the DaemonSet sets `NODE_N
 (`mig.strategy=mixed`), in devices, which is the same unit the exporters report. Time-slicing replicas renamed to
 `*.shared` are not devices and are left out of the counts, but a pod requesting one still counts as a GPU pod.
 
-## Why the relative `/api-kube` fetch
+## Requests to the kube-apiserver
 
-Inside a cluster frame the window origin is Freelens' proxy for that cluster and `/api-kube/*` is forwarded to the
-kube-apiserver with the kubeconfig's credentials. The typed `Renderer.K8sApi.KubeJsonApi.forCluster` exists in the
-1.10.3 typings but not at runtime, so it is only used when actually present.
+Every request goes through `Renderer.K8sApi.KubeJsonApi.forCluster(clusterId)`, the host's client for the cluster
+of the frame, with its `getResponse`: the response comes back as it is, so a non-2xx answer becomes an
+`HTTP <code> <statusText> for <path>` error, which discovery classifies (404 is a definite "no", anything else is
+retried soon), and the body is read as text, since `/metrics` is not JSON. A failed request is not repeated. The
+Freelens proxy authenticates the request by its authority and adds the kubeconfig's credentials, so `exec` plugins
+and tokens work as they do for the rest of Freelens.
 
-## Freelens v2 readiness (notes, 2026-09-24)
+## Freelens v2
 
-Freelens v2 (React 19, ESM renderer, new extension API global) is announced but unreleased: the latest release is
-v1.10.3, and the host does not yet publish the shared singletons its own migration guide tells extensions to use
-([freelens#2450](https://github.com/freelensapp/freelens/issues/2450)). Nothing can be tested against v2 yet, so this is
-a checklist, not a port. Source: `docs/v2-extension-migration.md` and `docs/v2-extension-api.md` in freelensapp/freelens.
+The extension targets the Freelens v2 extension API (`engines.freelens: ^2.0.0`) after 0.9.x, the last
+release for Freelens 1.x, which refuses a v2 extension at discovery as v2 refuses a v1 one. The port followed
+`docs/extensions/migrating-from-v1.md` of freelensapp/freelens and took the toolchain of
+[freelens-example-extension](https://github.com/freelensapp/freelens-example-extension):
 
-v2 refuses every v1 extension at discovery (`engines.freelens: ^1.x` yields `<2.0.0-0`), so the port is a **new major**
-of this extension, with 0.3.x staying the v1 line.
-
-| # | v2 requirement | This extension today | Work |
-| --- | --- | --- | --- |
-| 1 | `engines.freelens: ^2.0.0` | `^1.8.0` | bump in the v2 major only |
-| 2 | Renderer entry is **ESM**, loaded by URL (main may stay CJS) | renderer built as CJS via electron-vite `preload` | switch renderer `formats` to `es`, set `"type": "module"` or `.mjs` |
-| 3 | Host singletons come from `globalThis.FreelensExtensionApi.<Name>` (`React`, `ReactDom`, `ReactJsxRuntime`, `Mobx`, `MobxReact`, ...); `@freelensapp/extensions` is bundled, no longer external | `build/global-externals.js` maps to `global.React` etc. and externalises `@freelensapp/extensions` | retarget the plugin, drop the extensions id from the map |
-| 4 | React **19** (`react`, `react-dom`, `@types/react*` as devDependencies) | React 17 | bump; the code is function components + hooks only, with no `ReactDOM.render`, `findDOMNode` or string refs, so low risk |
-| 5 | mobx 6.15 host instance; a second mobx copy fails **silently** (reactions never fire) | mobx 6.13 / mobx-react 7 decorators + `makeObservable` | bump; assert that `gpuStore.snapshot` updates re-render a page, don't eyeball it |
-| 6 | tsconfig `lib: ["ES2024","DOM","DOM.Iterable"]`, `skipLibCheck`, `moduleResolution: bundler` | `bundler` since TypeScript 7 (inherited from `@electron-toolkit/tsconfig`); `paths` map `@freelensapp/core/{main,renderer}` to their `.d.ts` because the core exports map has no types | check `lib` / `skipLibCheck` only |
-| 7 | `Renderer.Util.fetch` for renderer HTTP; `KubeJsonApi.forCluster` stays supported; responses are the structural `FetchResponse` | relative `fetch('/api-kube'+path)`, probing for `forCluster` | prefer `forCluster` (documented in v2), else `Renderer.Util.fetch`; we only read `ok`/`status`/`statusText`/`text()`, all in `FetchResponse` |
-| 8 | Stylesheets imported normally, one CSS asset next to the entry | CSS string injected via `<style>` | optional: move `gpuStyles` to a `.css` import. Theme tokens (`var(--textColorPrimary)` …) remain the contract, and no removed `flexbox.scss` classes are used |
-| 9 | `Renderer.Component.List` and the `react-router` re-exports removed | not used (own `DataGrid`) | none |
-| 10 | Component/namespace renames (table not filled yet, [freelens#2451](https://github.com/freelensapp/freelens/issues/2451)) | uses `Button`, `Spinner`, `DrawerTitle`, `K8sApi.podsApi/nodesApi`, `Catalog.getActiveCluster`, `Common.logger` | re-check once the rename table lands |
-
-Start the port when freelens#2450 closes and a v2 pre-release exists to load it in.
+- ESM bundles built by Vite in library mode, `dist/main.js` and `dist/renderer.js`, with the host's React 19, mobx 7
+  and mobx-react 10 read from `globalThis.FreelensExtensionApi` (`build/vite-plugin-host-modules.mjs`).
+- `GpuStore` on standard decorators (`@observable accessor`, `@observableRef accessor`), lowered by
+  `build/vite-plugin-standard-decorators.mjs`; `store.test.ts` checks that its fields are observable and that a
+  reaction on a computed value fires.
+- The stylesheet in `src/renderer/styles.scss`, compiled into `dist/renderer.css`, which the host links, instead of a
+  `<style>` element rendered by every page and drawer.
+- The Pod and Node drawer sections inside an error boundary of the extension, registered with
+  `Renderer.K8sApi.detailsFor`: the nearest boundary of the host there is the whole cluster frame. Pages have none of
+  their own, because the host wraps every cluster page in a boundary that shows the error with its stacks and a Back
+  button.
+- One TypeScript program per runtime environment, so a Node API in renderer code fails `pnpm type:check`.

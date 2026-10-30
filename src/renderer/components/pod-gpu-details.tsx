@@ -5,7 +5,6 @@ import { podMayUseGpu, podUsesClaims } from "../gpu/presence";
 import { scrapeStatus } from "../gpu/status";
 import { gpuStore } from "../gpu/store";
 import { GpuTable } from "./gpu-table";
-import { gpuStyles } from "./styles";
 
 const { DrawerTitle } = Renderer.Component;
 
@@ -29,7 +28,6 @@ export const PodGpuDetails = observer(({ object: pod }: Props) => {
   const status = scrapeStatus(gpuStore.snapshot, gpuStore.error, false);
   return (
     <div className="gpuext-details">
-      <style>{gpuStyles}</style>
       <DrawerTitle>GPU</DrawerTitle>
       {rows
         .filter((r) => r.health && r.health.level !== "ok")
