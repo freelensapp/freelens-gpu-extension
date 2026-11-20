@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- AMD Device Metrics Exporter (`amd_gpu_gfx_activity`, `amd_gpu_used_vram`, `amd_gpu_average_package_power` and the
+  uncorrectable ECC total) is a third metrics source, next to dcgm-exporter and the per-process exporter. Pod labels
+  the exporter stamps from a device-plugin allocation or a DRA claim become the pod rows; the exporter pod itself is
+  not counted as a workload.
+- A cluster with DRA GPUs and no metrics exporter no longer shows the missing-exporter message as a failed scrape.
+  Allocation and Namespaces still render; the note says utilisation, VRAM and power stay empty.
+- AMD GPUs: recognise the AMD DRA driver (`gpu.amd.com`) and the device-plugin resource `amd.com/gpu`. ResourceSlices
+  and ResourceClaims from the ROCm DRA driver count for Allocation, Pending, Namespaces and pod GPU presence the same
+  way NVIDIA DRA does; whole GPUs (`amdgpu`) and compute partitions (`amdgpu-partition`, with `partitionProfile` /
+  `deviceID` / `parentDeviceID`) are parsed. Discovery also matches exporter pods whose name, image or labels mention
+  `amd` or `rocm`.
+
 ## 1.0.0
 
 - Ported to the Freelens v2 extension API: the extension needs Freelens 2.0.0 or newer (`engines.freelens: ^2.0.0`),

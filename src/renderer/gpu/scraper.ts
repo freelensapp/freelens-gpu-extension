@@ -13,6 +13,8 @@
 
 import { Common, Renderer } from "@freelensapp/extensions";
 import {
+  AMD_METRICS,
+  aggregateAmd,
   aggregateByGPU,
   aggregateByPod,
   aggregateDevicesDcgm,
@@ -54,7 +56,7 @@ import type { ExporterPod, ExporterScrape, GpuDevice, GpuRequests, PodGPU, PodSt
 
 type Pod = Renderer.K8sApi.Pod;
 
-const GPU_KEYWORDS = ["dcgm", "gpu", "nvidia", "cuda"];
+const GPU_KEYWORDS = ["dcgm", "gpu", "nvidia", "cuda", "amd", "rocm"];
 const PROBE_TIMEOUT_MS = 5_000;
 const SCRAPE_TIMEOUT_MS = 15_000;
 /** Discovery (pod list, probes) and the Prometheus search are reused this long, also when they found nothing. */
@@ -244,7 +246,7 @@ function describe(e: unknown): string {
 
 export interface ProbeResult {
   target: string;
-  outcome: "dcgm" | "enricher" | "prometheus" | "unrecognised" | "error";
+  outcome: "dcgm" | "enricher" | "amd" | "prometheus" | "unrecognised" | "error";
   detail?: string;
 }
 
@@ -259,6 +261,11 @@ export class GpuScraper {
   dra: DraIndex | undefined = undefined;
   /** Outcome of the last DRA read, for the Exporters page and the logs. */
   draNote = "";
+  /**
+   * Set when no metrics exporter answered but DRA (or the pod list) still describes the GPUs. Shown as a hint, not
+   * as a failed scrape: utilisation stays empty, allocation and claims do not.
+   */
+  metricsNote = "";
   /** Probes of the last discovery pass and of the last Prometheus search; see lastProbes. */
   private discoveryProbes: ProbeResult[] = [];
   private promProbes: ProbeResult[] = [];
@@ -512,18 +519,34 @@ export class GpuScraper {
     if (!clusterId) throw new Error("no active cluster");
     if (exporters.length === 0) {
       const viaProm = await this.fromPrometheus(clusterId);
-      if (viaProm) return this.aggregate(viaProm.bodies, viaProm.scraped);
+      if (viaProm) {
+        this.metricsNote = "";
+        return this.aggregate(viaProm.bodies, viaProm.scraped);
+      }
       const lines = [
         `No GPU metrics exporter found (${this.lastPodCount} pods listed, ${this.lastCandidateCount} GPU-looking candidates probed).`,
-        "An exporter is recognised when its /metrics emits DCGM_FI_DEV_* or gpu_process_memory_bytes; no Prometheus-compatible",
+        "An exporter is recognised when its /metrics emits DCGM_FI_DEV_*, gpu_process_memory_bytes or amd_gpu_*; no Prometheus-compatible",
         "query API with those series was found either. Pin a target on the Exporters page if discovery misses yours.",
         ...this.lastProbes.map((p) => `  ${p.target}: ${p.outcome}${p.detail ? ` — ${p.detail}` : ""}`),
       ];
       if (this.lastCandidateCount === 0 && this.lastPodCount === 0) {
         lines.push("  (no pods returned at all — check that this kubeconfig can list pods cluster-wide)");
       }
+      const draDevices = [...(this.dra?.devicesByNode.values() ?? [])].reduce((n, ds) => n + ds.length, 0);
+      if (draDevices > 0) {
+        // DRA still describes the devices. An empty snapshot lets Allocation and Namespaces render; the note says why
+        // utilisation, VRAM and power are blank.
+        this.metricsNote = [
+          lines[0],
+          `DRA published ${draDevices} GPU device${draDevices === 1 ? "" : "s"}. Allocation and namespace counts come from ResourceSlices and ResourceClaims.`,
+          "Utilisation, VRAM and power stay empty until an exporter emits DCGM_FI_DEV_*, gpu_process_memory_bytes or amd_gpu_*.",
+        ].join(" ");
+        return { scrapedAt: new Date(), mode: "pod", rows: [], gpus: [], exporters: [] };
+      }
+      this.metricsNote = "";
       throw new Error(lines.join("\n"));
     }
+    this.metricsNote = "";
 
     const scraped: ExporterScrape[] = [];
     const bodies = await Promise.all(
@@ -616,7 +639,7 @@ export class GpuScraper {
     try {
       text = await this.deps.fetchText(
         clusterId,
-        promQueryPath(target, selectorFor([...DCGM_METRICS, ...ENRICHER_METRICS])),
+        promQueryPath(target, selectorFor([...DCGM_METRICS, ...ENRICHER_METRICS, ...AMD_METRICS])),
         SCRAPE_TIMEOUT_MS,
       );
       groups = promResultToNodeFamilies(text);
@@ -665,6 +688,7 @@ export class GpuScraper {
   private aggregate(ok: { ex: ExporterPod; fams: Families }[], scraped: ExporterScrape[]): Snapshot {
     const enrichers = ok.filter((b) => b.ex.kind === "enricher");
     const dcgms = ok.filter((b) => b.ex.kind === "dcgm");
+    const amds = ok.filter((b) => b.ex.kind === "amd");
 
     // Pod rows: the per-process exporter where it reports, DCGM for every other
     // node (mixed node pools must not drop the DCGM-only nodes).
@@ -692,10 +716,22 @@ export class GpuScraper {
       }
       rows = rows.concat(dcgmRows);
     }
+    const coveredNodes = new Set(rows.map((r) => r.node));
+    for (const b of amds) {
+      if (coveredNodes.has(b.ex.nodeName)) continue;
+      const amd = aggregateAmd(b.fams, b.ex.nodeName);
+      if (amd.rows.length === 0) continue;
+      rows = rows.concat(amd.rows);
+      coveredNodes.add(b.ex.nodeName);
+    }
 
-    // Devices: prefer DCGM (true device gauges); use the per-process exporter
-    // for nodes DCGM does not cover.
+    // Devices: prefer DCGM (true device gauges); AMD, then the per-process exporter, cover the other nodes.
     let gpus: GpuDevice[] = dcgms.flatMap((b) => aggregateDevicesDcgm(b.fams, b.ex.nodeName));
+    if (amds.length > 0) {
+      const covered = new Set(gpus.map((d) => d.node));
+      const fromAmd = amds.flatMap((b) => aggregateAmd(b.fams, b.ex.nodeName).devices);
+      gpus = gpus.concat(fromAmd.filter((d) => !covered.has(d.node)));
+    }
     if (enrichers.length > 0) {
       const covered = new Set(gpus.map((d) => d.node));
       const fromEnricher = aggregateDevicesEnricher(enrichers.map((b) => ({ fams: b.fams, node: b.ex.nodeName })));

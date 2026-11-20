@@ -1,0 +1,109 @@
+{
+  "kind": "ResourceClaimList",
+  "apiVersion": "resource.k8s.io/v1",
+  "items": [
+    {
+      "metadata": {
+        "namespace": "gpu-test",
+        "name": "pod1-gpu"
+      },
+      "spec": {
+        "devices": {
+          "requests": [
+            {
+              "name": "gpu",
+              "exactly": {
+                "deviceClassName": "gpu.amd.com",
+                "allocationMode": "ExactCount",
+                "count": 1
+              }
+            }
+          ]
+        }
+      },
+      "status": {
+        "allocation": {
+          "devices": {
+            "results": [
+              {
+                "request": "gpu",
+                "driver": "gpu.amd.com",
+                "pool": "gpu-worker-2",
+                "device": "gpu-56-184"
+              }
+            ]
+          }
+        },
+        "reservedFor": [
+          {
+            "name": "pod1",
+            "resource": "pods",
+            "uid": "fd805c5d-54dd-4119-a839-35c5f52e2290"
+          }
+        ]
+      }
+    },
+    {
+      "metadata": {
+        "namespace": "gpu-test",
+        "name": "partition-job"
+      },
+      "spec": {
+        "devices": {
+          "requests": [
+            {
+              "name": "gpu",
+              "exactly": {
+                "deviceClassName": "gpu.amd.com",
+                "allocationMode": "ExactCount",
+                "count": 1
+              }
+            }
+          ]
+        }
+      },
+      "status": {
+        "allocation": {
+          "devices": {
+            "results": [
+              {
+                "request": "gpu",
+                "driver": "gpu.amd.com",
+                "pool": "gpu-worker-2",
+                "device": "gpu-4-132"
+              }
+            ]
+          }
+        },
+        "reservedFor": [
+          {
+            "name": "notebook",
+            "resource": "pods",
+            "uid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+          }
+        ]
+      }
+    },
+    {
+      "metadata": {
+        "namespace": "gpu-test",
+        "name": "eight-amd-gpus"
+      },
+      "spec": {
+        "devices": {
+          "requests": [
+            {
+              "name": "gpu",
+              "exactly": {
+                "deviceClassName": "gpu.amd.com",
+                "allocationMode": "ExactCount",
+                "count": 8
+              }
+            }
+          ]
+        }
+      },
+      "status": {}
+    }
+  ]
+}

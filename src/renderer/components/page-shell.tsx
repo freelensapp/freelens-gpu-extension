@@ -82,6 +82,7 @@ export const PageShell = observer(({ extension, title, subtitle, children, podOn
       </div>
       {subtitle && <div className="gpuext-hint gpuext-subtitle">{subtitle}</div>}
       {gpuStore.error && <div className="gpuext-error">{gpuStore.error}</div>}
+      {!gpuStore.error && gpuStore.metricsNote && <div className="gpuext-hint">{gpuStore.metricsNote}</div>}
       <div className="gpuext-body">
         {!ready && !gpuStore.loading && !gpuStore.error && (
           <div className="gpuext-empty">Waiting for the first scrape…</div>

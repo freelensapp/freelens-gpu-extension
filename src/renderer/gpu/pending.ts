@@ -48,7 +48,7 @@ export function gpuRequestsOf(containers: ContainerLike[]): Record<string, numbe
   return out;
 }
 
-const short = (r: string) => r.replace(/^nvidia\.com\//, "");
+const short = (r: string) => r.replace(/^(nvidia|amd)\.com\//, "");
 
 /** "mig-1g.10gb ×46, gpu ×1" — what the cluster offers in total, largest first. */
 function offered(nodes: NodeGpuResources[]): string {
