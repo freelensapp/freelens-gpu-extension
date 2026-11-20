@@ -4,6 +4,7 @@ import { nodeAdvertisesGpu, podMayUseGpu } from "../presence";
 describe("podMayUseGpu", () => {
   it("is true for GPU, MIG and time-sliced requests, in limits or requests", () => {
     expect(podMayUseGpu([{ resources: { limits: { "nvidia.com/gpu": "1" } } }])).toBe(true);
+    expect(podMayUseGpu([{ resources: { limits: { "amd.com/gpu": "1" } } }])).toBe(true);
     expect(podMayUseGpu([{ resources: { requests: { "nvidia.com/mig-1g.10gb": "1" } } }])).toBe(true);
     expect(podMayUseGpu([{}, { resources: { limits: { "nvidia.com/gpu.shared": "1" } } }])).toBe(true);
   });
@@ -25,6 +26,7 @@ describe("podMayUseGpu", () => {
 describe("nodeAdvertisesGpu", () => {
   it("is true when the capacity lists a GPU resource, even with zero devices", () => {
     expect(nodeAdvertisesGpu({ cpu: "8", "nvidia.com/gpu": "8" })).toBe(true);
+    expect(nodeAdvertisesGpu({ "amd.com/gpu": "2" })).toBe(true);
     expect(nodeAdvertisesGpu({ "nvidia.com/mig-3g.40gb": "2" })).toBe(true);
     expect(nodeAdvertisesGpu({ "nvidia.com/gpu": "0" })).toBe(true);
   });

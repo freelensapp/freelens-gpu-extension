@@ -81,8 +81,10 @@ function parseFloatProm(s: string | undefined): number | undefined {
 }
 
 /** Classify an exporter by the metric families its /metrics body emits. */
-export function classifyMetrics(text: string): "dcgm" | "enricher" | undefined {
+export function classifyMetrics(text: string): "dcgm" | "enricher" | "amd" | undefined {
   if (text.includes("gpu_process_memory_bytes")) return "enricher";
   if (text.includes("DCGM_FI_DEV_") || text.includes("DCGM_FI_PROF_")) return "dcgm";
+  // AMD Device Metrics Exporter. Checked after the NVIDIA families so a mixed body stays on those paths.
+  if (text.includes("amd_gpu_gfx_activity") || text.includes("amd_gpu_used_vram")) return "amd";
   return undefined;
 }

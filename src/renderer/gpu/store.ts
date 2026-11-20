@@ -67,6 +67,8 @@ export class GpuStore {
   /** Pod-list state; updated even when the metrics snapshot fails (no exporter, scrape errors). */
   @observableRef accessor podState: PodState | undefined = undefined;
   @observable accessor error: string | undefined = undefined;
+  /** Why utilisation is empty when DRA (or the pod list) still has GPUs. Not a failed scrape. */
+  @observable accessor metricsNote: string | undefined = undefined;
   @observable accessor loading = false;
   @observableRef accessor nodes: NodeInfo[] = [];
   @observable accessor nodesError: string | undefined = undefined;
@@ -432,11 +434,13 @@ export class GpuStore {
       runInAction(() => {
         this.snapshot = snap;
         this.error = undefined;
+        this.metricsNote = this.scraper.metricsNote || undefined;
         this.historyVersion++;
       });
     } catch (e) {
       runInAction(() => {
         this.error = e instanceof Error ? e.message : String(e);
+        this.metricsNote = undefined;
       });
     } finally {
       // Inference servers don't depend on a GPU exporter: scrape them whether or not the snapshot worked.

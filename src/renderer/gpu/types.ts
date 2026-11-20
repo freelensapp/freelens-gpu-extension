@@ -3,7 +3,7 @@
  * CLI's JSON output and this extension describe GPU usage identically.
  */
 
-export type ExporterKind = "dcgm" | "enricher";
+export type ExporterKind = "dcgm" | "enricher" | "amd";
 
 export interface ExporterPod {
   namespace: string;

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  aggregateAmd,
   aggregateByGPU,
   aggregateByPod,
   aggregateDevicesDcgm,
@@ -44,6 +45,7 @@ describe("prom parser", () => {
     expect(classifyMetrics(fixture("dcgm_pod_labels.prom"))).toBe("dcgm");
     expect(classifyMetrics(fixture("dcgm_mig.prom"))).toBe("dcgm");
     expect(classifyMetrics(fixture("enricher.prom"))).toBe("enricher");
+    expect(classifyMetrics(fixture("amd_device_metrics.prom"))).toBe("amd");
     expect(classifyMetrics("http_requests_total 1")).toBeUndefined();
   });
 });
@@ -208,8 +210,44 @@ describe("power and resource totals", () => {
   it("treats time-sliced *.shared requests as using a GPU", () => {
     expect(usesGpuResource({ "nvidia.com/gpu.shared": "1" })).toBe(true);
     expect(usesGpuResource({ "nvidia.com/mig-1g.10gb": "1" })).toBe(true);
+    expect(usesGpuResource({ "amd.com/gpu": "2" })).toBe(true);
+    expect(gpuResourceCount({ "amd.com/gpu": "2", cpu: "8" })).toBe(2);
     expect(usesGpuResource({ "nvidia.com/gpu": "0", cpu: "4" })).toBe(false);
     expect(usesGpuResource(undefined)).toBe(false);
+  });
+});
+
+describe("AMD device metrics exporter", () => {
+  const view = aggregateAmd(fams("amd_device_metrics.prom"), "n1");
+  it("attributes the workload pod and keeps one device, ignoring the exporter pod and repeated gauges", () => {
+    expect(view.rows).toEqual([
+      expect.objectContaining({
+        source: "amd",
+        namespace: "dra-test",
+        pod: "amd-dra-holder",
+        node: "n1",
+        gpus: ["0"],
+        gpuCount: 1,
+        gpuUtilPct: 2,
+        vramUsedMiB: 2905,
+        vramFreeMiB: 32768 - 2905,
+        powerWatts: 22,
+      }),
+    ]);
+    expect(view.devices).toEqual([
+      expect.objectContaining({
+        node: "n1",
+        gpu: "0",
+        uuid: "00001586-0000-1000-8000-000000000000",
+        model: "AMD Radeon 8060S Graphics",
+        utilPct: 2,
+        vramUsedMiB: 2905,
+        vramTotalMiB: 32768,
+        powerWatts: 22,
+        eccDbe: 0,
+        pods: ["dra-test/amd-dra-holder"],
+      }),
+    ]);
   });
 });
 

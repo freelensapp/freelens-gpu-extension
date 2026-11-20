@@ -5,7 +5,7 @@
 
 import { isGpuResourceName, usesGpuResource } from "./aggregate";
 
-/** A pod that references DRA claims (spec.resourceClaims): it may hold a GPU without any nvidia.com/gpu request. */
+/** A pod that references DRA claims (spec.resourceClaims): it may hold a GPU without a device-plugin request. */
 export function podUsesClaims(spec: { resourceClaims?: unknown[] } | undefined): boolean {
   return (spec?.resourceClaims?.length ?? 0) > 0;
 }
@@ -30,7 +30,7 @@ export function podMayUseGpu(containers: ContainerLike[]): boolean {
   );
 }
 
-/** The node advertises a GPU resource (nvidia.com/gpu or a MIG profile), even with zero devices allocatable. */
+/** The node advertises a GPU resource (nvidia.com/gpu, MIG, or amd.com/gpu), even with zero devices allocatable. */
 export function nodeAdvertisesGpu(capacity: Record<string, string> | undefined): boolean {
   return Object.keys(capacity ?? {}).some(isGpuResourceName);
 }
