@@ -1,0 +1,9 @@
+# AMD Device Metrics Exporter, one GPU attributed to a DRA pod. The exporter's own pod label must be ignored.
+amd_gpu_gfx_activity{gpu_id="0",gpu_uuid="00001586-0000-1000-8000-000000000000",card_model="AMD Radeon 8060S Graphics",namespace="dra-test",pod="amd-dra-holder",hostname="n1"} 2
+amd_gpu_gfx_activity{gpu_id="0",gpu_uuid="00001586-0000-1000-8000-000000000000",card_model="AMD Radeon 8060S Graphics",namespace="kube-amd-gpu",pod="amdgpu-metrics-exporter-x",hostname="n1"} 2
+amd_gpu_used_vram{gpu_id="0",gpu_uuid="00001586-0000-1000-8000-000000000000",namespace="dra-test",pod="amd-dra-holder"} 2905
+amd_gpu_used_vram{gpu_id="0",gpu_uuid="00001586-0000-1000-8000-000000000000",namespace="dra-test",pod="amd-dra-holder"} 2905
+amd_gpu_total_vram{gpu_id="0",gpu_uuid="00001586-0000-1000-8000-000000000000",namespace="dra-test",pod="amd-dra-holder"} 32768
+amd_gpu_free_vram{gpu_id="0",gpu_uuid="00001586-0000-1000-8000-000000000000",namespace="dra-test",pod="amd-dra-holder"} 29863
+amd_gpu_average_package_power{gpu_id="0",gpu_uuid="00001586-0000-1000-8000-000000000000",namespace="dra-test",pod="amd-dra-holder"} 22
+amd_gpu_ecc_uncorrect_total{gpu_id="0",gpu_uuid="00001586-0000-1000-8000-000000000000",namespace="dra-test",pod="amd-dra-holder"} 0

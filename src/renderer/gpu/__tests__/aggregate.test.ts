@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  aggregateAmd,
   aggregateByGPU,
   aggregateByPod,
   aggregateDevicesDcgm,
@@ -44,6 +45,7 @@ describe("prom parser", () => {
     expect(classifyMetrics(fixture("dcgm_pod_labels.prom"))).toBe("dcgm");
     expect(classifyMetrics(fixture("dcgm_mig.prom"))).toBe("dcgm");
     expect(classifyMetrics(fixture("enricher.prom"))).toBe("enricher");
+    expect(classifyMetrics(fixture("amd_device_metrics.prom"))).toBe("amd");
     expect(classifyMetrics("http_requests_total 1")).toBeUndefined();
   });
 });
@@ -208,8 +210,117 @@ describe("power and resource totals", () => {
   it("treats time-sliced *.shared requests as using a GPU", () => {
     expect(usesGpuResource({ "nvidia.com/gpu.shared": "1" })).toBe(true);
     expect(usesGpuResource({ "nvidia.com/mig-1g.10gb": "1" })).toBe(true);
+    expect(usesGpuResource({ "amd.com/gpu": "2" })).toBe(true);
+    expect(gpuResourceCount({ "amd.com/gpu": "2", cpu: "8" })).toBe(2);
     expect(usesGpuResource({ "nvidia.com/gpu": "0", cpu: "4" })).toBe(false);
     expect(usesGpuResource(undefined)).toBe(false);
+  });
+});
+
+describe("AMD device metrics exporter", () => {
+  const view = aggregateAmd(fams("amd_device_metrics.prom"), "n1");
+  it("attributes the workload pod and keeps one device, ignoring the exporter pod and repeated gauges", () => {
+    expect(view.rows).toEqual([
+      expect.objectContaining({
+        source: "amd",
+        namespace: "dra-test",
+        pod: "amd-dra-holder",
+        node: "n1",
+        gpus: ["0"],
+        gpuCount: 1,
+        gpuUtilPct: 2,
+        vramUsedMiB: 2905,
+        vramFreeMiB: 32768 - 2905,
+        powerWatts: 22,
+      }),
+    ]);
+    expect(view.devices).toEqual([
+      expect.objectContaining({
+        node: "n1",
+        gpu: "0",
+        uuid: "00001586-0000-1000-8000-000000000000",
+        model: "AMD Radeon 8060S Graphics",
+        utilPct: 2,
+        vramUsedMiB: 2905,
+        vramTotalMiB: 32768,
+        powerWatts: 22,
+        eccDbe: 0,
+        pods: ["dra-test/amd-dra-holder"],
+      }),
+    ]);
+  });
+});
+
+describe("AMD exporter on a card in CPX (MI300X: GPU 7 split into 8 partitions, gpu_id 7 to 14)", () => {
+  const view = aggregateAmd(fams("amd_device_metrics_mi300x_cpx.prom"), "n1");
+  const dev = (gpu: string) => view.devices.find((d) => d.gpu === gpu) as GpuDevice;
+
+  it("lists a device per partition and puts the pod on the partitions it holds", () => {
+    expect(view.devices).toHaveLength(15);
+    expect(dev("12")).toMatchObject({ vramUsedMiB: 1016, vramTotalMiB: 24574, pods: ["dra-test/load-2part"] });
+    expect(dev("13").pods).toEqual(["dra-test/load-2part"]);
+    expect(dev("11").pods).toEqual([]);
+    expect(view.rows).toEqual([
+      expect.objectContaining({ pod: "load-2part", gpus: ["12", "13"], vramUsedMiB: 2032, gpuCount: 2 }),
+    ]);
+  });
+
+  it("marks the partitions, and only partition 0 carries the card's utilisation and power", () => {
+    expect(dev("7")).toMatchObject({ partitioned: true, utilPublished: true, powerPublished: true });
+    expect(dev("12")).toMatchObject({ partitioned: true });
+    expect(dev("12").utilPublished).toBeUndefined();
+    expect(dev("12").powerPublished).toBeUndefined();
+    expect(dev("0").partitioned).toBeUndefined();
+  });
+
+  it("has utilisation and power only on partition 0, because the exporter publishes them per card", () => {
+    expect(dev("7")).toMatchObject({ utilPct: 25, powerWatts: 471 });
+    expect(dev("12")).toMatchObject({ utilPct: 0, powerWatts: 0 });
+    expect(dev("0")).toMatchObject({ vramTotalMiB: 196592, powerWatts: 150 });
+  });
+
+  it("gives partition 0 its partition size, not the card's VRAM, so the node total is right", () => {
+    // The exporter reports 196592 MiB for gpu_id 7; its seven siblings report 24574 MiB each.
+    expect(dev("7").vramTotalMiB).toBe(24574);
+    const total = view.devices.reduce((sum, d) => sum + d.vramTotalMiB, 0);
+    expect(Math.round(total / 1024)).toBe(7 * 192 + 8 * 24); // 7 SPX cards plus the CPX card: 1536 GiB
+  });
+});
+
+describe("AMD partitions are sized per card", () => {
+  // Two cards on one node in different splits: card A in three 32 GiB partitions, card B in four 24 GiB ones. Partition
+  // 0 of each reports the card's whole VRAM. Each card must keep its own partition size, not the node's.
+  const gauge = (gpu: string, part: string, serial: string, total: number) =>
+    `amd_gpu_total_vram{gpu_id="${gpu}",gpu_partition_id="${part}",gpu_compute_partition_type="dpx",serial_number="${serial}",hostname="n1",gpu_uuid="u${gpu}"} ${total}`;
+  const text = [
+    gauge("0", "0", "A", 196592),
+    gauge("1", "1", "A", 32768),
+    gauge("2", "2", "A", 32768),
+    gauge("3", "0", "B", 196592),
+    gauge("4", "1", "B", 24574),
+    gauge("5", "2", "B", 24574),
+    gauge("6", "3", "B", 24574),
+  ].join("\n");
+
+  it("uses the size most partitions of the same card report", () => {
+    const view = aggregateAmd(parsePrometheusText(text), "n1");
+    const total = (gpu: string) => view.devices.find((d) => d.gpu === gpu)?.vramTotalMiB;
+    expect(total("0")).toBe(32768);
+    expect(total("1")).toBe(32768);
+    expect(total("3")).toBe(24574);
+    expect(total("6")).toBe(24574);
+  });
+});
+
+describe("AMD package power under either exporter name", () => {
+  it("reads amd_gpu_package_power, as MI300X exports it", () => {
+    const text = fixture("amd_device_metrics.prom").replaceAll(
+      "amd_gpu_average_package_power",
+      "amd_gpu_package_power",
+    );
+    const view = aggregateAmd(parsePrometheusText(text), "n1");
+    expect(view.devices[0]).toMatchObject({ gpu: "0", powerWatts: 22 });
+    expect(view.rows[0]).toMatchObject({ powerWatts: 22 });
   });
 });
 

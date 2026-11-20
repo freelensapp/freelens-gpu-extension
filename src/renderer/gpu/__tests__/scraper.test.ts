@@ -77,6 +77,114 @@ describe("GpuScraper pod state", () => {
     expect(ps?.requestedByNamespace.ml.pods).toEqual(["ml/run", "ml/starting"]);
     expect(ps?.requestedByNamespace.web).toBeUndefined();
   });
+
+  it("returns an empty snapshot instead of failing when DRA published devices and no exporter answered", async () => {
+    const slices = JSON.stringify({
+      items: [
+        {
+          spec: {
+            driver: "gpu.amd.com",
+            nodeName: "n1",
+            pool: { name: "n1" },
+            devices: [{ name: "gpu-1-128", attributes: { type: { string: "amdgpu" } } }],
+          },
+        },
+      ],
+    });
+    const claims = JSON.stringify({
+      items: [
+        {
+          metadata: { namespace: "dra-test", name: "hold" },
+          spec: { devices: { requests: [{ name: "gpu", exactly: { deviceClassName: "gpu.amd.com", count: 1 } }] } },
+          status: {
+            allocation: { devices: { results: [{ driver: "gpu.amd.com", pool: "n1", device: "gpu-1-128" }] } },
+            reservedFor: [{ resource: "pods", name: "holder" }],
+          },
+        },
+      ],
+    });
+    const pods = [pod({ ns: "dra-test", name: "holder", phase: "Running", node: "n1" })];
+    const s = new GpuScraper({
+      clusterId: () => "c1",
+      listPods: async () => pods as never,
+      listServices: async () => [],
+      fetchText: async () => "",
+      fetchDra: async (_id, path) => (path.endsWith("/resourceslices") ? slices : claims),
+    });
+    const snap = await s.snapshot();
+    expect(snap.rows).toEqual([]);
+    expect(snap.exporters).toEqual([]);
+    expect(s.metricsNote).toMatch(/DRA published 1 GPU device/);
+    expect(s.podState?.draDevicesByNode?.n1).toMatchObject({ count: 1 });
+    expect(s.podState?.requestedByNamespace["dra-test"]).toMatchObject({
+      gpus: 1,
+      byResource: { "amdgpu (DRA)": 1 },
+    });
+  });
+});
+
+describe("GpuScraper AMD exporter", () => {
+  it("accepts the AMD device metrics exporter and attributes the labelled pod", async () => {
+    const body = readFileSync(join(__dirname, "fixtures", "amd_device_metrics.prom"), "utf8");
+    const exporter = pod({
+      ns: "kube-amd-gpu",
+      name: "amdgpu-metrics-exporter-x",
+      phase: "Running",
+      node: "n1",
+      ports: [5000],
+    });
+    const s = new GpuScraper({
+      clusterId: () => "c1",
+      listPods: async () => [exporter] as never,
+      listServices: async () => [],
+      fetchText: async () => body,
+    });
+    const snap = await s.snapshot();
+    expect(snap.exporters.map((e) => e.kind)).toEqual(["amd"]);
+    expect(snap.rows.map((r) => `${r.namespace}/${r.pod}`)).toEqual(["dra-test/amd-dra-holder"]);
+    expect(snap.gpus[0]).toMatchObject({ model: "AMD Radeon 8060S Graphics", utilPct: 2, powerWatts: 22 });
+    expect(s.metricsNote).toBe("");
+  });
+
+  it("names an MI300X by the DRA productName when the exporter only reports its part number", async () => {
+    const body = readFileSync(join(__dirname, "fixtures", "amd_device_metrics.prom"), "utf8").replaceAll(
+      'card_model="AMD Radeon 8060S Graphics"',
+      'card_model="102-G30211-0C"',
+    );
+    const slices = JSON.stringify({
+      items: [
+        {
+          spec: {
+            driver: "gpu.amd.com",
+            nodeName: "n1",
+            pool: { name: "n1" },
+            devices: [
+              {
+                name: "gpu-1-128",
+                attributes: { type: { string: "amdgpu" }, productName: { string: "AMD_Instinct_MI300X_OAM" } },
+              },
+            ],
+          },
+        },
+      ],
+    });
+    const exporter = pod({
+      ns: "kube-amd-gpu",
+      name: "amdgpu-metrics-exporter-x",
+      phase: "Running",
+      node: "n1",
+      ports: [5000],
+    });
+    const s = new GpuScraper({
+      clusterId: () => "c1",
+      listPods: async () => [exporter] as never,
+      listServices: async () => [],
+      fetchText: async () => body,
+      fetchDra: async (_id, path) => (path.endsWith("/resourceslices") ? slices : JSON.stringify({ items: [] })),
+    });
+    const snap = await s.snapshot();
+    expect(snap.gpus[0]).toMatchObject({ model: "AMD_Instinct_MI300X_OAM", utilPct: 2 });
+  });
 });
 
 describe("GpuScraper discovery sources", () => {
@@ -487,7 +595,9 @@ describe("GpuScraper with DRA", () => {
       paths.push(path);
       return raw(path.endsWith("resourceslices") ? "dra_resourceslices_v1.json" : "dra_resourceclaims_v1.json");
     });
-    await expect(s.snapshot()).rejects.toThrow(/No GPU metrics exporter found/);
+    const snap = await s.snapshot();
+    expect(snap.exporters).toEqual([]);
+    expect(s.metricsNote).toMatch(/DRA published 4 GPU devices/);
     expect(paths).toEqual(["/apis/resource.k8s.io/v1/resourceslices", "/apis/resource.k8s.io/v1/resourceclaims"]);
 
     const ps = s.podState;

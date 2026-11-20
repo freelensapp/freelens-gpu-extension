@@ -3,7 +3,7 @@
  * CLI's JSON output and this extension describe GPU usage identically.
  */
 
-export type ExporterKind = "dcgm" | "enricher";
+export type ExporterKind = "dcgm" | "enricher" | "amd";
 
 export interface ExporterPod {
   namespace: string;
@@ -57,6 +57,11 @@ export interface GpuDevice {
   vramUsedMiB: number;
   vramTotalMiB: number;
   powerWatts: number;
+  /** AMD: one partition of a card split by the driver (CPX, DPX, QPX). */
+  partitioned?: boolean;
+  /** AMD: the exporter published utilisation and power for this device. On a partition it does so only for the one that carries the card's reading. */
+  utilPublished?: boolean;
+  powerPublished?: boolean;
   tempC?: number;
   /** DCGM profiling counters as %, when DCP metrics are enabled on the exporter. */
   smActivePct?: number;

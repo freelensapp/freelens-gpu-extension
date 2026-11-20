@@ -40,7 +40,7 @@ const EXPORTER_COLUMNS: Column<ExporterScrape>[] = [
     value: (e) => `${e.kind}${e.via ? ` ${e.via}` : ""}`,
     render: (e) => (
       <span className="gpuext-badge">
-        {e.kind === "dcgm" ? "dcgm-exporter" : "per-process"}
+        {e.kind === "dcgm" ? "dcgm-exporter" : e.kind === "amd" ? "amd-device-metrics" : "per-process"}
         {e.via === "prometheus" ? " via Prometheus" : ""}
       </span>
     ),

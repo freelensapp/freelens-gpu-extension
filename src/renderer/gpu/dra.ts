@@ -1,9 +1,9 @@
 /**
  * GPUs allocated with Dynamic Resource Allocation (resource.k8s.io). On DRA nodes a pod holds a GPU through a
- * ResourceClaim instead of an nvidia.com/gpu count, so the device plugin's view (node capacity, container limits)
- * misses it. This module reads the DRA objects:
+ * ResourceClaim instead of a device-plugin count (nvidia.com/gpu or amd.com/gpu), so node capacity and container
+ * limits miss it. This module reads the DRA objects:
  *
- * - ResourceSlice: the devices of a driver on a node (gpu-0, gpu-0-mig-1g10gb-19-0) with their attributes;
+ * - ResourceSlice: the devices of a driver on a node (gpu-0, gpu-0-mig-1g10gb-19-0, gpu-56-184) with their attributes;
  * - ResourceClaim: the devices allocated to a claim (status.allocation.devices.results) and the pods using it
  *   (status.reservedFor, or the owner pod of a claim generated from a template).
  *
@@ -11,11 +11,12 @@
  * Kubernetes 1.32 and 1.33 (v1beta1 wraps a device in "basic" and puts deviceClassName directly on the request).
  */
 
-/** DRA drivers whose devices are GPUs. NVIDIA's dra-driver-nvidia-gpu publishes whole GPUs and MIG slices. */
-export const DRA_GPU_DRIVERS: ReadonlySet<string> = new Set(["gpu.nvidia.com"]);
+/** DRA drivers whose devices are GPUs: NVIDIA (whole GPUs and MIG) and AMD (whole GPUs and compute partitions). */
+export const DRA_GPU_DRIVERS: ReadonlySet<string> = new Set(["gpu.nvidia.com", "gpu.amd.com"]);
 
-/** Device classes that select GPUs: gpu.nvidia.com, mig.nvidia.com, and the like (not the ComputeDomain classes). */
+/** Device classes that select GPUs: gpu.nvidia.com, mig.nvidia.com, gpu.amd.com, and the like (not ComputeDomain). */
 export function isGpuDeviceClass(name: string): boolean {
+  if (/(^|\.)amd\.com$/.test(name)) return true;
   return /(^|\.)nvidia\.com$/.test(name) && !/compute-domain/.test(name);
 }
 
@@ -23,15 +24,19 @@ export interface DraDevice {
   node: string;
   driver: string;
   pool: string;
-  /** Device name within the pool, e.g. "gpu-0" or "gpu-2-mig-1g10gb-19-0". */
+  /** Device name within the pool, e.g. "gpu-0", "gpu-2-mig-1g10gb-19-0" or "gpu-56-184". */
   name: string;
-  /** "gpu" or "mig" for the NVIDIA driver. */
+  /** "gpu" / "mig" (NVIDIA) or "amdgpu" / "amdgpu-partition" (AMD). */
   type?: string;
+  /**
+   * Device identity for podsOnCard / metrics join: NVIDIA uuid, or the AMD deviceID when uuid is absent. When several
+   * devices of a node share one deviceID (the PCI id of the model) it is the PCI address of the card instead.
+   */
   uuid?: string;
-  /** Card of a MIG slice. */
+  /** Parent card of a MIG slice (parentUUID) or of an AMD partition (parentDeviceID). */
   parentUuid?: string;
   product?: string;
-  /** MIG profile, e.g. "1g.10gb". */
+  /** MIG profile (e.g. "1g.10gb") or AMD partitionProfile (e.g. "cpx_nps1"). */
   profile?: string;
   memoryMiB?: number;
 }
@@ -94,6 +99,8 @@ export function quantityMiB(q: string | undefined): number | undefined {
 /** GPU devices of the known GPU drivers in a ResourceSliceList. Slices of other drivers are ignored. */
 export function parseResourceSlices(list: unknown): DraDevice[] {
   const out: DraDevice[] = [];
+  /** What the identity was derived from, to tell a deviceID that names a card from one that names a model. */
+  const derived: { dev: DraDevice; deviceID: string; pci?: string; parentUuidAttr?: string }[] = [];
   for (const item of arr(obj(list).items)) {
     const spec = obj(obj(item).spec);
     const driver = str(spec.driver);
@@ -101,25 +108,58 @@ export function parseResourceSlices(list: unknown): DraDevice[] {
     if (!driver || !node || !DRA_GPU_DRIVERS.has(driver)) continue;
     const pool = str(obj(spec.pool).name) ?? node;
     for (const d of arr(spec.devices)) {
-      const dev = obj(d);
-      const name = str(dev.name);
+      const raw = obj(d);
+      const name = str(raw.name);
       if (!name) continue;
-      const body = dev.basic ? obj(dev.basic) : dev; // v1beta1 wraps attributes and capacity in "basic"
+      const body = raw.basic ? obj(raw.basic) : raw; // v1beta1 wraps attributes and capacity in "basic"
       const attrs = obj(body.attributes);
       const capacity = obj(body.capacity);
       const memory = obj(capacity.memory ?? capacity[`${driver}/memory`]);
-      out.push({
+      const explicitUuid = attr(attrs, "uuid", driver);
+      const deviceID = attr(attrs, "deviceID", driver);
+      const dev: DraDevice = {
         node,
         driver,
         pool,
         name,
         type: attr(attrs, "type", driver),
-        uuid: attr(attrs, "uuid", driver),
-        parentUuid: attr(attrs, "parentUUID", driver),
+        // NVIDIA publishes uuid; AMD publishes deviceID without a uuid attribute. Older AMD drivers made it a per-card
+        // id; newer ones publish the PCI device id of the model, shared by every card (see the pass below).
+        uuid: explicitUuid ?? deviceID,
+        parentUuid: attr(attrs, "parentUUID", driver) ?? attr(attrs, "parentDeviceID", driver),
         product: attr(attrs, "productName", driver),
-        profile: attr(attrs, "profile", driver),
+        // NVIDIA MIG uses profile; AMD compute partitions use partitionProfile.
+        profile: attr(attrs, "profile", driver) ?? attr(attrs, "partitionProfile", driver),
         memoryMiB: quantityMiB(str(memory.value)),
-      });
+      };
+      out.push(dev);
+      if (!explicitUuid && deviceID) {
+        derived.push({
+          dev,
+          deviceID,
+          // The standard device attribute, or the older AMD driver's own name for it.
+          pci: attr(attrs, "resource.kubernetes.io/pciBusID", driver) ?? attr(attrs, "pciAddr", driver),
+          parentUuidAttr: attr(attrs, "parentUUID", driver),
+        });
+      }
+    }
+  }
+  // A deviceID shared by several devices of a node names a model, not a card: eight MI300X would collapse into one
+  // identity and every pod would be listed on all of them. The PCI address of the card tells them apart; a partition
+  // takes its own name too, because it shares the address of the card it belongs to.
+  const sharing = new Map<string, number>();
+  const groupKey = (d: DraDevice, id: string) => `${d.node}\u0000${d.driver}\u0000${id}`;
+  for (const m of derived) {
+    const key = groupKey(m.dev, m.deviceID);
+    sharing.set(key, (sharing.get(key) ?? 0) + 1);
+  }
+  for (const m of derived) {
+    if ((sharing.get(groupKey(m.dev, m.deviceID)) ?? 0) < 2) continue;
+    if (m.dev.type === "amdgpu-partition") {
+      m.dev.uuid = `${m.pci ?? m.deviceID}/${m.dev.name}`;
+      if (m.pci && !m.parentUuidAttr) m.dev.parentUuid = m.pci;
+    } else {
+      m.dev.uuid = m.pci ?? `${m.deviceID}/${m.dev.name}`;
     }
   }
   return out;
@@ -173,7 +213,7 @@ export interface DraIndex {
   podDevices: Map<string, DraDevice[]>;
   /** Claims by "ns/name", for the pending hints. */
   claims: Map<string, DraClaim>;
-  /** Pods holding each device, by UUID (whole GPUs and MIG slices). */
+  /** Pods holding each device, by UUID / deviceID (whole GPUs, MIG slices and AMD partitions). */
   podsByUuid: Map<string, string[]>;
 }
 
@@ -211,6 +251,7 @@ export function indexDra(state: DraState): DraIndex {
 /** Resource name for a DRA device in the per-resource counts (Namespaces "Resources" column, pending requests). */
 export function draResourceName(d: Pick<DraDevice, "type" | "profile" | "driver">): string {
   if (d.type === "mig" && d.profile) return `mig-${d.profile} (DRA)`;
+  if (d.type === "amdgpu-partition" && d.profile) return `amdgpu-partition-${d.profile} (DRA)`;
   return `${d.type ?? d.driver} (DRA)`;
 }
 
@@ -246,24 +287,53 @@ export function pendingGpuClaims(pod: PodClaimsLike & { metadata?: { namespace?:
     );
 }
 
-/** Device type a well-known NVIDIA device class selects, to compare a request with the devices on offer. */
-const CLASS_TYPE: Record<string, string> = { "gpu.nvidia.com": "gpu", "mig.nvidia.com": "mig" };
+/**
+ * Device types a well-known GPU device class selects, to compare a request with the devices on offer.
+ * AMD's gpu.amd.com covers both full GPUs and compute partitions.
+ */
+export function typesForDeviceClass(name: string): string[] | undefined {
+  switch (name) {
+    case "gpu.nvidia.com":
+      return ["gpu"];
+    case "mig.nvidia.com":
+      return ["mig"];
+    case "gpu.amd.com":
+      return ["amdgpu", "amdgpu-partition"];
+    default:
+      return undefined;
+  }
+}
+
+/** Short label for a well-known device class in Pending / Namespaces. */
+export function labelForDeviceClass(name: string): string {
+  switch (name) {
+    case "gpu.nvidia.com":
+      return "gpu";
+    case "mig.nvidia.com":
+      return "mig";
+    case "gpu.amd.com":
+      return "amdgpu";
+    default:
+      return name;
+  }
+}
 
 /**
  * Hints for the unallocated DRA claims of a pending pod, only for requests that can never be satisfied as written:
  * no ResourceSlice offers the device type, or the claim asks for more devices than any node has. A claim that is
- * just waiting for busy devices gets no hint (the scheduler message says so). Only the well-known NVIDIA classes are
- * checked; for other classes the selector is not evaluated, so nothing is claimed about them.
+ * just waiting for busy devices gets no hint (the scheduler message says so). Only the well-known NVIDIA and AMD
+ * classes are checked; for other classes the selector is not evaluated, so nothing is claimed about them.
  */
 export function explainPendingClaims(claims: DraClaim[], ix: DraIndex): string[] {
   const hints: string[] = [];
   for (const c of claims) {
     for (const r of c.requests) {
-      const types = r.deviceClasses.map((k) => CLASS_TYPE[k]);
-      if (types.length === 0 || types.some((t) => !t)) continue;
+      const perClass = r.deviceClasses.map((k) => typesForDeviceClass(k));
+      if (perClass.length === 0 || perClass.some((t) => !t)) continue;
+      const types = [...new Set(perClass.flatMap((t) => t as string[]))];
       const perNode = [...ix.devicesByNode.values()].map((ds) => ds.filter((d) => types.includes(d.type ?? "")).length);
       const max = Math.max(0, ...perNode);
-      const what = types.join(" or ");
+      const what = r.deviceClasses.map(labelForDeviceClass).join(" or ");
       if (max === 0) hints.push(`No node publishes a ${what} device in a DRA ResourceSlice (claim ${c.name}).`);
       else if (r.count > max)
         hints.push(`Needs ${r.count} ${what} on one node (claim ${c.name}); the most any node offers is ${max}.`);
@@ -274,10 +344,10 @@ export function explainPendingClaims(claims: DraClaim[], ix: DraIndex): string[]
 
 /** Short label for the device classes of a DRA request: "gpu (DRA)" for gpu.nvidia.com, as in the Namespaces view. */
 export function draRequestLabel(deviceClasses: string[]): string {
-  return `${deviceClasses.map((k) => CLASS_TYPE[k] ?? k).join(" | ")} (DRA)`;
+  return `${deviceClasses.map(labelForDeviceClass).join(" | ")} (DRA)`;
 }
 
-/** Pods holding a card (by GPU UUID), directly or through one of its MIG slices. */
+/** Pods holding a card (by GPU UUID / deviceID), directly or through one of its MIG slices / AMD partitions. */
 export function podsOnCard(ix: DraIndex, uuid: string): string[] {
   const out = new Set(ix.podsByUuid.get(uuid) ?? []);
   for (const [pod, devs] of ix.podDevices) if (devs.some((d) => d.parentUuid === uuid)) out.add(pod);

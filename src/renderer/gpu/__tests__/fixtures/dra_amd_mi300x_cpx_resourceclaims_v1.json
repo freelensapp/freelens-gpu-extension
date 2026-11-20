@@ -1,0 +1,65 @@
+{
+  "kind": "ResourceClaimList",
+  "apiVersion": "resource.k8s.io/v1",
+  "items": [
+    {
+      "metadata": {
+        "namespace": "dra-test",
+        "name": "load-2part-parts-55fv7",
+        "ownerReferences": [
+          {
+            "kind": "Pod",
+            "name": "load-2part"
+          }
+        ]
+      },
+      "spec": {
+        "devices": {
+          "requests": [
+            {
+              "exactly": {
+                "allocationMode": "ExactCount",
+                "count": 2,
+                "deviceClassName": "gpu.amd.com",
+                "selectors": [
+                  {
+                    "cel": {
+                      "expression": "device.attributes[\"gpu.amd.com\"].type == \"amdgpu-partition\""
+                    }
+                  }
+                ]
+              },
+              "name": "part"
+            }
+          ]
+        }
+      },
+      "status": {
+        "allocation": {
+          "devices": {
+            "results": [
+              {
+                "request": "part",
+                "driver": "gpu.amd.com",
+                "pool": "mi300x-node",
+                "device": "gpu-62-189"
+              },
+              {
+                "request": "part",
+                "driver": "gpu.amd.com",
+                "pool": "mi300x-node",
+                "device": "gpu-63-190"
+              }
+            ]
+          }
+        },
+        "reservedFor": [
+          {
+            "resource": "pods",
+            "name": "load-2part"
+          }
+        ]
+      }
+    }
+  ]
+}

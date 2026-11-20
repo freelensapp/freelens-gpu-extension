@@ -73,12 +73,13 @@ are blacked out.
 
 | Source | Found through | Attribution |
 | --- | --- | --- |
-| NVIDIA dcgm-exporter with pod labels (`--kubernetes`, the GPU Operator default) | Running pods whose name, image or labels mention `dcgm`, `gpu`, `nvidia` or `cuda`, probed on `/metrics` and classified by content (`DCGM_FI_DEV_*`) | One row per pod, one per MIG slice on partitioned cards |
+| NVIDIA dcgm-exporter with pod labels (`--kubernetes`, the GPU Operator default) | Running pods whose name, image or labels mention `dcgm`, `gpu`, `nvidia`, `cuda`, `amd` or `rocm`, probed on `/metrics` and classified by content (`DCGM_FI_DEV_*`) | One row per pod, one per MIG slice on partitioned cards |
 | dcgm-exporter without pod labels | The same probe | One row per (node, GPU) with the candidate pods of that node |
 | Per-process exporter | `/metrics` emitting `gpu_process_memory_bytes` with `namespace` and `pod` labels | Per process, also for workloads that bypass the device plugin with `NVIDIA_VISIBLE_DEVICES=all`; power split by VRAM share |
+| AMD Device Metrics Exporter | `/metrics` emitting `amd_gpu_gfx_activity` or `amd_gpu_used_vram` (port 5000) | One row per pod the exporter attributes, from the device plugin or from a DRA `ResourceClaim`; device gauges (util, VRAM, package power, uncorrectable ECC) are not summed when repeated |
 | Prometheus, Thanos, VictoriaMetrics or Mimir query API | Found automatically in the cluster, or pinned as `namespace/svc/name:port`, through the service proxy | The same metrics, with the labels Prometheus rewrites repaired; used when no exporter pod answers |
 | Pinned exporter pods | `namespace/pod-prefix:port` on the **Exporters** page, per cluster | As above, by the content of `/metrics` |
-| Dynamic Resource Allocation (`resource.k8s.io`), NVIDIA DRA driver (`gpu.nvidia.com`) | `ResourceSlice` devices per node and `ResourceClaim` allocations, read with the pod list | GPUs and MIG slices held through a claim count for their pod, namespace and node (Pods, Namespaces, Allocation); unallocated claims show in Pending. Without pod labels on dcgm-exporter, the claim names the pod holding each card (by UUID) |
+| Dynamic Resource Allocation (`resource.k8s.io`), NVIDIA DRA driver (`gpu.nvidia.com`) and AMD DRA driver (`gpu.amd.com`) | `ResourceSlice` devices per node and `ResourceClaim` allocations, read with the pod list | GPUs, MIG slices and AMD compute partitions held through a claim count for their pod, namespace and node (Pods, Namespaces, Allocation); unallocated claims show in Pending. Without pod labels on dcgm-exporter, the claim names the pod holding each NVIDIA card (by UUID); AMD devices use `deviceID` the same way |
 
 <!-- markdownlint-enable MD013 -->
 
@@ -119,11 +120,11 @@ You can also build and pack the extension yourself, see
 ## Features
 
 - **Autodiscovery**: lists pods, keeps Running ones whose name, image or
-  labels mention `dcgm`, `gpu`, `nvidia` or `cuda`, probes each `/metrics`
-  and classifies by content: NVIDIA **dcgm-exporter** (`DCGM_FI_DEV_*`) or a
-  **per-process exporter** (`gpu_process_memory_bytes`). Nothing to configure,
-  nothing to deploy. If discovery misses yours, **pin** it per cluster on the
-  Exporters page (`namespace/pod-prefix:port`).
+  labels mention `dcgm`, `gpu`, `nvidia`, `cuda`, `amd` or `rocm`, probes each
+  `/metrics` and classifies by content: NVIDIA **dcgm-exporter**
+  (`DCGM_FI_DEV_*`) or a **per-process exporter** (`gpu_process_memory_bytes`).
+  Nothing to configure, nothing to deploy. If discovery misses yours, **pin**
+  it per cluster on the Exporters page (`namespace/pod-prefix:port`).
 - **Prometheus fallback**: when no exporter pod answers, reads the same
   metrics from a Prometheus, Thanos, VictoriaMetrics or Mimir query API
   already in the cluster (found automatically, or pinned as
@@ -136,8 +137,9 @@ You can also build and pack the extension yourself, see
   `get services/proxy` for the Prometheus fallback, and `list` on DRA
   `resourceslices` and `resourceclaims` where DRA is used).
 - **Dynamic Resource Allocation**: GPUs requested through a `ResourceClaim`
-  instead of `nvidia.com/gpu` are recognised from the DRA objects, with the
-  devices each node publishes counted as capacity on the Allocation view.
+  instead of `nvidia.com/gpu` or `amd.com/gpu` are recognised from the DRA
+  objects (NVIDIA `gpu.nvidia.com` and AMD `gpu.amd.com`), with the devices
+  each node publishes counted as capacity on the Allocation view.
 - **Correct attribution**: per pod when the exporter carries pod labels; per
   MIG slice on partitioned cards (rows grouped under their physical GPU); per
   process when workloads bypass the device plugin with
@@ -223,11 +225,13 @@ a MobX store that polls every 20 s while a GPU view is mounted.
   page.
 - Freelens must be able to reach the pod-proxy subresource with the RBAC of
   your kubeconfig; restricted tokens without `pods/proxy` cannot work.
-- DRA support reads the devices of NVIDIA's DRA driver (`gpu.nvidia.com`),
-  whose GPU allocation is not yet officially supported by NVIDIA (its
-  ComputeDomains are). dcgm-exporter cannot attribute dynamically created
-  MIG slices yet (NVIDIA/dcgm-exporter#714); the claim still shows which pod
-  holds them.
+- DRA support reads the devices of NVIDIA's DRA driver (`gpu.nvidia.com`) and
+  AMD's (`gpu.amd.com`). NVIDIA GPU allocation via DRA is not yet officially
+  supported by NVIDIA (its ComputeDomains are). dcgm-exporter cannot attribute
+  dynamically created MIG slices yet (NVIDIA/dcgm-exporter#714); the claim still
+  shows which pod holds them. AMD utilisation, VRAM and power come from the
+  AMD Device Metrics Exporter (`amd_gpu_*`); DRA alone covers allocation and
+  pending claims.
 - The idle history behind **Idle & waste** is kept in memory while Freelens
   is open; it starts again at every launch.
 
