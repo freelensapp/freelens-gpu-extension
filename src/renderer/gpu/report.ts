@@ -133,13 +133,15 @@ export function reportMarkdown(r: ReportInput): string {
     out.push("\n**Idle GPU holders**");
     out.push(
       table(
-        ["Pod", "Node", "GPU", "VRAM held", "Idle for"],
+        ["Pod", "Node", "GPU", "VRAM held", "Idle for", "Idle share", "Peak VRAM"],
         r.idle.map((p) => [
           `${p.namespace}/${p.pod}`,
           p.node,
           p.gpus.join(","),
           mib(p.vramUsedMiB),
-          `${p.idleMinutes.toFixed(0)} min`,
+          `${p.idleAtLeast ? "≥ " : ""}${p.idleMinutes.toFixed(0)} min`,
+          p.lookback?.idleShare === undefined ? "–" : pct(p.lookback.idleShare * 100),
+          p.lookback ? mib(p.lookback.peakVramMiB) : "–",
         ]),
       ),
     );

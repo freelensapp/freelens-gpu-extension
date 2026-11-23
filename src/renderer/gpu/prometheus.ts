@@ -76,6 +76,39 @@ const SCRAPE_LABELS = ["instance", "job", "endpoint", "service", "prometheus", "
 /** Pod names of the exporters themselves: a series "attributed" to one of them is really unattributed. */
 const EXPORTER_POD = /dcgm-exporter|dcgm_exporter|nvidia-dcgm|gpu-enricher|gpu-exporter/i;
 
+/**
+ * Labels of a series as the exporter emitted them, from what a query API returns.
+ *
+ * Prometheus stores the workload's namespace/pod as exported_namespace/exported_pod when the target's own labels
+ * collide, and stamps the exporter pod's namespace/pod on series that carried none. So exported_* win, and a pod
+ * that is the exporter itself means "no workload". The labels the scrape adds are dropped, which makes the copies of
+ * one series (HA pairs, several ServiceMonitors) identical.
+ */
+export function repairLabels(metric: Record<string, string>): {
+  name: string | undefined;
+  labels: Record<string, string>;
+  node: string;
+} {
+  const { __name__: name, ...raw } = metric;
+  const labels: Record<string, string> = { ...raw };
+  for (const k of ["namespace", "pod", "container"]) {
+    if (labels[`exported_${k}`] !== undefined) {
+      labels[k] = labels[`exported_${k}`];
+      delete labels[`exported_${k}`];
+    }
+  }
+  if (labels.pod && EXPORTER_POD.test(labels.pod)) {
+    delete labels.pod;
+    delete labels.namespace;
+    delete labels.container;
+  }
+  for (const k of SCRAPE_LABELS) delete labels[k];
+  // Service discovery's node label is authoritative; DCGM's Hostname is the exporter pod name unless NODE_NAME is set.
+  const node = labels.node || labels.kubernetes_node || labels.nodename || labels.Hostname || "";
+  if (node) labels.Hostname = node;
+  return { name, labels, node };
+}
+
 export interface NodeFamilies {
   node: string;
   kind: "dcgm" | "enricher";
@@ -83,12 +116,7 @@ export interface NodeFamilies {
 }
 
 /**
- * Instant-query vector → families per (exporter kind, node).
- *
- * Label repair: Prometheus stores the workload's namespace/pod as
- * exported_namespace/exported_pod when the target's own labels collide, and
- * stamps the exporter pod's namespace/pod on series that carried none. So
- * exported_* win, and a pod that is the exporter itself means "no workload".
+ * Instant-query vector → families per (exporter kind, node), with the labels repaired (see repairLabels).
  */
 export function promResultToNodeFamilies(json: string): NodeFamilies[] {
   const v = parse(json);
@@ -96,24 +124,8 @@ export function promResultToNodeFamilies(json: string): NodeFamilies[] {
   const groups = new Map<string, NodeFamilies>();
   const seen = new Set<string>();
   for (const r of v.data?.result ?? []) {
-    const { __name__: name, ...raw } = r.metric;
+    const { name, labels, node } = repairLabels(r.metric);
     if (!name) continue;
-    const labels: Record<string, string> = { ...raw };
-    for (const k of ["namespace", "pod", "container"]) {
-      if (labels[`exported_${k}`] !== undefined) {
-        labels[k] = labels[`exported_${k}`];
-        delete labels[`exported_${k}`];
-      }
-    }
-    if (labels.pod && EXPORTER_POD.test(labels.pod)) {
-      delete labels.pod;
-      delete labels.namespace;
-      delete labels.container;
-    }
-    for (const k of SCRAPE_LABELS) delete labels[k];
-    // Service discovery's node label is authoritative; DCGM's Hostname is the exporter pod name unless NODE_NAME is set.
-    const node = labels.node || labels.kubernetes_node || labels.nodename || labels.Hostname || "";
-    if (node) labels.Hostname = node;
     const key = `${name}{${Object.keys(labels)
       .sort()
       .map((k) => `${k}=${labels[k]}`)

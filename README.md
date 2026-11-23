@@ -61,7 +61,7 @@ are blacked out.
   cluster: `list pods` cluster-wide and `list nodes` (discovery and the
   Allocation view), `get pods/proxy` in the exporter's namespace (the
   scrape), plus `list services` and `get services/proxy` for the Prometheus
-  fallback, and `list resourceslices` and `list resourceclaims`
+  fallback and for the history on Idle & waste, and `list resourceslices` and `list resourceclaims`
   (`resource.k8s.io`) on clusters with Dynamic Resource Allocation. Without
   that permission, or on a cluster without DRA, the rest works as before.
 - **Node.js** is required only when building the extension from source; it
@@ -129,11 +129,16 @@ You can also build and pack the extension yourself, see
   already in the cluster (found automatically, or pinned as
   `namespace/svc/name:port`) through the service proxy, repairing the labels
   Prometheus rewrites.
+- **History from Prometheus**: with such a query API in the cluster, **Idle &
+  waste** reaches back 24 hours or 7 days instead of to the moment Freelens
+  opened: how long each pod has really been idle, the share of the window it
+  spent idle, and the most VRAM it ever held. Also when the live numbers come
+  from the exporter pods; without a query API the view works as before.
 - **Zero cluster footprint**: reads `/metrics` through the kube-apiserver
   pod-proxy subresource over the Freelens cluster connection. No DaemonSet,
   no Prometheus required, no port-forward, no RBAC beyond `list pods`,
   `list nodes`, `get pods/proxy` (plus `list services` and
-  `get services/proxy` for the Prometheus fallback, and `list` on DRA
+  `get services/proxy` for the Prometheus fallback and history, and `list` on DRA
   `resourceslices` and `resourceclaims` where DRA is used).
 - **Dynamic Resource Allocation**: GPUs requested through a `ResourceClaim`
   instead of `nvidia.com/gpu` are recognised from the DRA objects, with the
@@ -175,7 +180,7 @@ work without a GPU exporter):
 | **Namespaces** | Whose GPUs are these, and are they using them: per namespace, devices requested (by resource), devices in use, mean utilisation, VRAM held, VRAM held idle, pods waiting, power. |
 | **Inference** | vLLM servers next to their GPUs: model, **KV cache**, running and waiting requests, generated tokens/s, recent time to first token, prefix-cache hit rate, preemptions and errors, with a status (*saturated* when the KV cache is full and requests queue). Found automatically among GPU pods. |
 | **GPUs** | One row per physical GPU or MIG slice: model, MIG profile, utilisation, **SM active, Tensor and Mem BW** (DCGM profiling counters), VRAM used, total and %, power, temperature, **Health** (XID with its meaning, uncorrectable ECC, row remapping, hardware throttling), and the pods sharing it. Cards with no pod are listed too. |
-| **Idle & waste** | Pods holding VRAM at under 5 % utilisation, with how long they have been idle (history kept while Freelens is open). The first place to look before buying more GPUs. |
+| **Idle & waste** | Pods holding VRAM at under 5 % utilisation, with how long they have been idle. With a Prometheus-compatible query API in the cluster, the history of the last 24 h or 7 d: **Idle for** reaches back to the pod's last busy moment (`≥` when it was never seen busy), **Idle share** is the part of the window spent idle, and **Peak VRAM** is the most it ever held, which is what it actually needs. Without one, the history is kept while Freelens is open. The first place to look before buying more GPUs. |
 | **Allocation** | Per node: **health** (worst device, red when the device plugin withdrew GPUs), GPU capacity (`nvidia.com/gpu` plus `nvidia.com/mig-*`), allocatable, **unhealthy** (capacity minus allocatable), what pods request, **free MIG slices per profile**, and what the exporters measure as busy. Scheduler view and reality side by side. |
 | **Pending** | Pods waiting for a GPU: how long, what they request, the scheduler's message, and a **Why** for requests that can never fit (a resource no node offers, `nvidia.com/gpu` on a MIG-partitioned cluster, more devices than any node has). |
 | **Exporters** | What discovery found: each exporter's kind (or "via Prometheus"), node, scrape latency and body size, every candidate probed and why it was or was not accepted, and the **pinned targets** for this cluster. |
@@ -228,8 +233,13 @@ a MobX store that polls every 20 s while a GPU view is mounted.
   ComputeDomains are). dcgm-exporter cannot attribute dynamically created
   MIG slices yet (NVIDIA/dcgm-exporter#714); the claim still shows which pod
   holds them.
-- The idle history behind **Idle & waste** is kept in memory while Freelens
-  is open; it starts again at every launch.
+- The history behind **Idle & waste** comes from a Prometheus-compatible
+  query API when the cluster has one with the GPU series (it needs
+  `list services` and `get services/proxy`); otherwise it is kept in memory
+  while Freelens is open and starts again at every launch. The history is
+  read in steps of 5 minutes (24 h) or 30 minutes (7 d): the peaks are exact,
+  and the last busy moment is known to the step. It follows the pod by name,
+  so a pod that was recreated starts again.
 
 ## Development
 

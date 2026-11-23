@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Idle & waste reads the history of the last 24 hours or 7 days from a Prometheus-compatible query API in the
+  cluster (Prometheus, Thanos, VictoriaMetrics, Mimir; the one the Prometheus fallback finds, or a pinned service),
+  also when the live numbers come from the exporter pods. "Idle for" reaches back to the pod's last busy moment
+  instead of to the moment Freelens opened, with `≥` for a pod that was never seen busy; **Idle share** is the part
+  of the window the pod spent under 5 % utilisation, and **Peak VRAM** is the most it held. One range query per
+  metric (`max_over_time` per step, so short bursts count), every 5 minutes while the view is open, through the
+  service proxy: it needs `list services` and `get services/proxy`, and without them or without a query API the view
+  works as before. The snapshot (Copy JSON, Copy Markdown) carries the new numbers.
+
 ## 1.0.0
 
 - Ported to the Freelens v2 extension API: the extension needs Freelens 2.0.0 or newer (`engines.freelens: ^2.0.0`),

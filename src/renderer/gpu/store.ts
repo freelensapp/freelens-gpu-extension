@@ -20,6 +20,7 @@ import {
   totalPowerW,
 } from "./aggregate";
 import { type InferenceLevel, inferenceStatus, type VllmRates, type VllmSample, vllmRates } from "./inference";
+import { idleStretch, type LookbackWindow, type PodLookback, podLookbacks } from "./lookback";
 import { aggregateNamespaces, migFree, type NamespaceRow } from "./namespaces";
 import { explainPending, type NodeGpuResources, type PendingGpuPod } from "./pending";
 import { DISCOVERY_TTL_MS, GpuScraper, type InferenceScrape, type ProbeResult } from "./scraper";
@@ -33,6 +34,18 @@ const STALE_MS = 30_000;
 const HISTORY_MS = 6 * 60 * 60_000; // keep up to 6h of samples per pod
 export const IDLE_UTIL_PCT = 5;
 export const IDLE_MIN_VRAM_MIB = 256;
+/** The lookback moves by one step (5 or 30 min) at a time; reading it more often returns the same steps. */
+const LOOKBACK_INTERVAL_MS = 5 * 60_000;
+
+/** The last lookback read from the query API of the cluster. */
+export interface LookbackState {
+  window: LookbackWindow;
+  fetchedAt: number;
+  /** "namespace/svc/name:port" of the query API; undefined when the cluster has none with GPU series. */
+  source?: string;
+  byPod: Map<string, PodLookback>;
+  error?: string;
+}
 
 interface NodeInfo {
   name: string;
@@ -75,6 +88,13 @@ export class GpuStore {
   /** Rolling per-pod history, keyed "ns/pod". Bumped via historyVersion for observers. */
   readonly history = new Map<string, HistoryPoint[]>();
   @observable accessor historyVersion = 0;
+  /** History from the query API of the cluster, read while the Idle & waste view is open. */
+  @observableRef accessor lookback: LookbackState | undefined = undefined;
+  @observable accessor lookbackWindow: LookbackWindow = "7d";
+  @observable accessor lookbackLoading = false;
+  private lookbackTimer: ReturnType<typeof setInterval> | undefined;
+  private lookbackSubscribers = 0;
+  private lookbackInflight: Promise<void> | undefined;
 
   private timer: ReturnType<typeof setInterval> | undefined;
   private inflight: Promise<void> | undefined;
@@ -143,23 +163,26 @@ export class GpuStore {
   /** Pods currently holding VRAM at (near) zero utilisation, with how long we have seen them idle. */
   @computed get idleRows(): IdleRow[] {
     void this.historyVersion; // subscribe to history updates
+    const lb = this.lookback?.window === this.lookbackWindow ? this.lookback.byPod : undefined;
     const out: IdleRow[] = [];
     for (const r of this.rows) {
       if (r.gpuIndex) continue; // fallback rows have no pod identity
       if (r.gpuUtilPct >= IDLE_UTIL_PCT || r.vramUsedMiB < IDLE_MIN_VRAM_MIB) continue;
-      const h = this.history.get(`${r.namespace}/${r.pod}`) ?? [];
-      // walk back from the newest sample while util stays below threshold
-      let i = h.length - 1;
-      while (i >= 0 && h[i].utilPct < IDLE_UTIL_PCT) i--;
+      const key = `${r.namespace}/${r.pod}`;
+      const h = this.history.get(key) ?? [];
+      const lookback = lb?.get(key);
+      const now = Date.now();
+      // the session's newest idle stretch, reaching back through the lookback when the whole session is idle
+      const stretch = idleStretch(h, lookback, now, IDLE_UTIL_PCT);
       // peak over the whole retained window, so a pod that was busy earlier stands out
-      const peak = h.reduce((m, p) => Math.max(m, p.utilPct), r.gpuUtilPct);
-      const idleSince = h[i + 1]?.t ?? Date.now();
-      const samples = h.length - 1 - i;
+      const peak = h.reduce((m, p) => Math.max(m, p.utilPct), Math.max(r.gpuUtilPct, lookback?.peakUtilPct ?? 0));
       out.push({
         ...r,
-        idleMinutes: Math.max(0, (Date.now() - idleSince) / 60_000),
-        samples,
+        idleMinutes: Math.max(0, (now - stretch.since) / 60_000),
+        idleAtLeast: stretch.atLeast,
+        samples: stretch.samples,
         peakUtilPct: peak,
+        lookback,
       });
     }
     return out.sort((a, b) => b.vramUsedMiB - a.vramUsedMiB);
@@ -470,6 +493,71 @@ export class GpuStore {
         clearInterval(this.timer);
         this.timer = undefined;
         this.subscribers = 0;
+      }
+    };
+  }
+
+  /** Read the lookback now (deduplicated while one is in flight); a failure is kept on the state, never thrown. */
+  refreshLookback(): Promise<void> {
+    if (this.lookbackInflight) return this.lookbackInflight;
+    const window = this.lookbackWindow;
+    runInAction(() => {
+      this.lookbackLoading = true;
+    });
+    this.lookbackInflight = this.scraper
+      .lookback(window)
+      .then((res): LookbackState => {
+        if (!res) return { window, fetchedAt: Date.now(), byPod: new Map() };
+        const { target, stepS, results } = res;
+        return {
+          window,
+          fetchedAt: Date.now(),
+          source: `${target.namespace}/svc/${target.name}:${target.port}`,
+          byPod: podLookbacks(results, stepS, IDLE_UTIL_PCT),
+        };
+      })
+      .catch(
+        (e): LookbackState => ({
+          window,
+          fetchedAt: Date.now(),
+          byPod: new Map(),
+          error: e instanceof Error ? e.message : String(e),
+        }),
+      )
+      .then((state) => {
+        runInAction(() => {
+          this.lookback = state;
+          this.lookbackLoading = false;
+        });
+        this.lookbackInflight = undefined;
+      });
+    return this.lookbackInflight;
+  }
+
+  /** Switch between the lookback windows and read the new one. */
+  setLookbackWindow(window: LookbackWindow) {
+    if (window === this.lookbackWindow) return;
+    runInAction(() => {
+      this.lookbackWindow = window;
+    });
+    // refreshLookback() returns the read in flight, which is for the other window: chain a new one after it.
+    void (this.lookbackInflight ?? Promise.resolve()).then(() => this.refreshLookback());
+  }
+
+  /** Reference-counted like subscribe(): the Idle & waste view reads the lookback while it is mounted. */
+  subscribeLookback(intervalMs = LOOKBACK_INTERVAL_MS): () => void {
+    this.lookbackSubscribers++;
+    if (!this.lookbackTimer) {
+      const fresh = this.lookback?.window === this.lookbackWindow && Date.now() - this.lookback.fetchedAt < intervalMs;
+      if (!fresh) void this.refreshLookback();
+      this.lookbackTimer = setInterval(() => void this.refreshLookback(), intervalMs);
+    }
+    return () => {
+      this.lookbackSubscribers--;
+      if (this.lookbackSubscribers <= 0 && this.lookbackTimer) {
+        clearInterval(this.lookbackTimer);
+        this.lookbackTimer = undefined;
+        this.lookbackSubscribers = 0;
       }
     };
   }

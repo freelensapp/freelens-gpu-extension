@@ -569,3 +569,92 @@ describe("GpuScraper with DRA", () => {
     expect(s.draNote).toMatch(/^DRA: not read \(HTTP 403 Forbidden/);
   });
 });
+
+describe("GpuScraper lookback", () => {
+  const countOk = JSON.stringify({ status: "success", data: { result: [{ metric: {}, value: [0, "1"] }] } });
+  const empty = JSON.stringify({ status: "success", data: { resultType: "matrix", result: [] } });
+  const exporter = pod({
+    ns: "gpu-operator",
+    name: "nvidia-dcgm-exporter-x",
+    phase: "Running",
+    node: "n1",
+    ports: [9400],
+  });
+  const make = (services: { namespace: string; name: string; ports: { name?: string; port: number }[] }[]) => {
+    const paths: string[] = [];
+    const s = new GpuScraper({
+      clusterId: () => "c1",
+      listPods: async () => [exporter] as never,
+      listServices: async () => services,
+      fetchText: async (_c, path) => {
+        paths.push(path);
+        if (path.endsWith("/proxy/metrics"))
+          return 'DCGM_FI_DEV_FB_USED{gpu="0",UUID="GPU-a",namespace="ml",pod="p"} 100\n';
+        return path.includes("count(") ? countOk : empty;
+      },
+    });
+    return { s, paths };
+  };
+
+  it("reads the history from the query API also when the live numbers come from an exporter pod", async () => {
+    const { s, paths } = make([{ namespace: "mon", name: "prometheus-server", ports: [{ name: "http", port: 80 }] }]);
+    const snap = await s.snapshot();
+    expect(snap.exporters[0]).toMatchObject({ name: "nvidia-dcgm-exporter-x", kind: "dcgm" });
+    expect(snap.exporters[0].via).toBeUndefined();
+
+    const now = 1_800_000_000_000;
+    const lb = await s.lookback("7d", now);
+    expect(lb?.target).toEqual({ namespace: "mon", name: "prometheus-server", port: 80 });
+    expect(lb?.stepS).toBe(1800);
+    expect(lb?.results.map((r) => r.metric)).toEqual([
+      "DCGM_FI_DEV_GPU_UTIL",
+      "DCGM_FI_PROF_GR_ENGINE_ACTIVE",
+      "DCGM_FI_DEV_FB_USED",
+      "gpu_process_utilization_percent",
+      "gpu_process_memory_bytes",
+    ]);
+    const ranges = paths.filter((p) => p.includes("/query_range?"));
+    expect(ranges).toHaveLength(5);
+    expect(ranges[2]).toBe(
+      "/api/v1/namespaces/mon/services/prometheus-server:80/proxy/api/v1/query_range" +
+        `?query=${encodeURIComponent("max_over_time(DCGM_FI_DEV_FB_USED[1800s])")}` +
+        `&start=${1_800_000_000 - 7 * 86400 + 1800}&end=1800000000&step=1800`,
+    );
+
+    // the query API is probed once and reused by the next read
+    await s.lookback("24h", now);
+    expect(paths.filter((p) => p.includes("count("))).toHaveLength(1);
+    // and the live numbers still come from the exporter pod
+    expect((await s.snapshot()).exporters[0].via).toBeUndefined();
+  });
+
+  it("has no history on a cluster without a query API, and does not list the services again at once", async () => {
+    let listed = 0;
+    const s = new GpuScraper({
+      clusterId: () => "c1",
+      listPods: async () => [],
+      listServices: async () => {
+        listed++;
+        return [];
+      },
+      fetchText: async () => empty,
+    });
+    expect(await s.lookback("7d")).toBeUndefined();
+    expect(await s.lookback("7d")).toBeUndefined();
+    expect(listed).toBe(1);
+  });
+
+  it("fails as a whole when one of the range queries fails", async () => {
+    const s = new GpuScraper({
+      clusterId: () => "c1",
+      listPods: async () => [],
+      listServices: async () => [{ namespace: "mon", name: "prometheus-server", ports: [{ name: "http", port: 80 }] }],
+      fetchText: async (_c, path) => {
+        if (path.includes("count(")) return countOk;
+        if (path.includes("FB_USED")) throw new Error("HTTP 503 Service Unavailable");
+        return empty;
+      },
+    });
+    await expect(s.lookback("7d")).rejects.toThrow("HTTP 503");
+  });
+});

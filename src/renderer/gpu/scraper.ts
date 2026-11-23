@@ -37,6 +37,14 @@ import {
   podsOnCard,
 } from "./dra";
 import { classifyInference, INFERENCE_HINT, type InferenceEngine, parseVllm, type VllmSample } from "./inference";
+import {
+  LOOKBACK_METRICS,
+  type LookbackMetric,
+  type LookbackWindow,
+  lookbackQuery,
+  lookbackRange,
+  promRangePath,
+} from "./lookback";
 import { gpuRequestsOf, type PendingGpuPod } from "./pending";
 import { classifyMetrics, type Families, parsePrometheusText } from "./prom";
 import {
@@ -57,6 +65,8 @@ type Pod = Renderer.K8sApi.Pod;
 const GPU_KEYWORDS = ["dcgm", "gpu", "nvidia", "cuda"];
 const PROBE_TIMEOUT_MS = 5_000;
 const SCRAPE_TIMEOUT_MS = 15_000;
+/** A week of steps for every GPU series of the cluster takes a query API longer than an instant query. */
+const RANGE_TIMEOUT_MS = 30_000;
 /** Discovery (pod list, probes) and the Prometheus search are reused this long, also when they found nothing. */
 export const DISCOVERY_TTL_MS = 60_000;
 
@@ -559,57 +569,86 @@ export class GpuScraper {
   }
 
   /**
-   * No exporter pod answered: look for a Prometheus-compatible query API (pinned services first, then services that
-   * look like one), take the first that has GPU series, and read every family we use in a single instant query.
+   * The Prometheus-compatible query API that keeps the GPU series: pinned services first, then services that look
+   * like one, the first that has them. The choice is reused until discovery runs again, and so is a miss.
+   */
+  private async findPrometheus(clusterId: string): Promise<PromTarget | undefined> {
+    if (this.prom) return this.prom;
+    const probe = selectorFor(["DCGM_FI_DEV_FB_USED", "gpu_process_memory_bytes"]);
+    // Nothing found a moment ago: keep that answer (and its probes) instead of listing every service again.
+    if (Date.now() - this.promMissAt < DISCOVERY_TTL_MS) return undefined;
+    this.promProbes = [];
+    let services: ServiceLike[] = [];
+    try {
+      services = await this.deps.listServices();
+    } catch (e) {
+      this.promProbes.push({ target: "services", outcome: "error", detail: `list services: ${describe(e)}` });
+    }
+    const pinned: PromTarget[] = this.pins.flatMap((t) =>
+      t.kind === "service" ? [{ namespace: t.namespace, name: t.name, port: t.port }] : [],
+    );
+    const seen = new Set<string>();
+    const candidates = [...pinned, ...promCandidates(services)]
+      .filter((t) => !seen.has(`${t.namespace}/${t.name}`) && seen.add(`${t.namespace}/${t.name}`))
+      .slice(0, 6);
+    for (const t of candidates) {
+      const label = `prometheus ${t.namespace}/svc/${t.name}:${t.port}`;
+      try {
+        const n = seriesCount(
+          await this.deps.fetchText(clusterId, promQueryPath(t, `count(${probe})`), PROBE_TIMEOUT_MS),
+        );
+        if (n > 0) {
+          this.promProbes.push({ target: label, outcome: "prometheus" });
+          this.prom = t;
+          return t;
+        }
+        this.promProbes.push({
+          target: label,
+          outcome: "unrecognised",
+          detail: "query API answers but has no GPU series",
+        });
+      } catch (e) {
+        this.promProbes.push({ target: label, outcome: "error", detail: describe(e) });
+      }
+    }
+    this.promMissAt = Date.now();
+    return undefined;
+  }
+
+  /**
+   * History for the Idle & waste view: one range query per metric against the query API of the cluster, also when
+   * the live numbers come from the exporter pods. Undefined when the cluster has no query API with GPU series.
+   */
+  async lookback(
+    window: LookbackWindow,
+    nowMs = Date.now(),
+  ): Promise<{ target: PromTarget; stepS: number; results: { metric: LookbackMetric; json: string }[] } | undefined> {
+    const clusterId = this.deps.clusterId();
+    if (!clusterId) throw new Error("no active cluster");
+    const target = await this.findPrometheus(clusterId);
+    if (!target) return undefined;
+    const { startS, endS, stepS } = lookbackRange(nowMs, window);
+    const results = await Promise.all(
+      LOOKBACK_METRICS.map(async (metric) => ({
+        metric,
+        json: await this.deps.fetchText(
+          clusterId,
+          promRangePath(target, lookbackQuery(metric, stepS), startS, endS, stepS),
+          RANGE_TIMEOUT_MS,
+        ),
+      })),
+    );
+    return { target, stepS, results };
+  }
+
+  /**
+   * No exporter pod answered: read every family we use from the query API of the cluster in a single instant query.
    */
   private async fromPrometheus(
     clusterId: string,
   ): Promise<{ bodies: { ex: ExporterPod; fams: Families }[]; scraped: ExporterScrape[] } | undefined> {
-    const probe = selectorFor(["DCGM_FI_DEV_FB_USED", "gpu_process_memory_bytes"]);
-    let target = this.prom;
-    if (!target) {
-      // Nothing found a moment ago: keep that answer (and its probes) instead of listing every service again.
-      if (Date.now() - this.promMissAt < DISCOVERY_TTL_MS) return undefined;
-      this.promProbes = [];
-      let services: ServiceLike[] = [];
-      try {
-        services = await this.deps.listServices();
-      } catch (e) {
-        this.promProbes.push({ target: "services", outcome: "error", detail: `list services: ${describe(e)}` });
-      }
-      const pinned: PromTarget[] = this.pins.flatMap((t) =>
-        t.kind === "service" ? [{ namespace: t.namespace, name: t.name, port: t.port }] : [],
-      );
-      const seen = new Set<string>();
-      const candidates = [...pinned, ...promCandidates(services)]
-        .filter((t) => !seen.has(`${t.namespace}/${t.name}`) && seen.add(`${t.namespace}/${t.name}`))
-        .slice(0, 6);
-      for (const t of candidates) {
-        const label = `prometheus ${t.namespace}/svc/${t.name}:${t.port}`;
-        try {
-          const n = seriesCount(
-            await this.deps.fetchText(clusterId, promQueryPath(t, `count(${probe})`), PROBE_TIMEOUT_MS),
-          );
-          if (n > 0) {
-            this.promProbes.push({ target: label, outcome: "prometheus" });
-            target = t;
-            break;
-          }
-          this.promProbes.push({
-            target: label,
-            outcome: "unrecognised",
-            detail: "query API answers but has no GPU series",
-          });
-        } catch (e) {
-          this.promProbes.push({ target: label, outcome: "error", detail: describe(e) });
-        }
-      }
-      if (!target) {
-        this.promMissAt = Date.now();
-        return undefined;
-      }
-      this.prom = target;
-    }
+    const target = await this.findPrometheus(clusterId);
+    if (!target) return undefined;
     const t0 = performance.now();
     let text: string;
     let groups: ReturnType<typeof promResultToNodeFamilies>;
