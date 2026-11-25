@@ -12,7 +12,7 @@
   and ResourceClaims from the ROCm DRA driver count for Allocation, Pending, Namespaces and pod GPU presence the same
   way NVIDIA DRA does; whole GPUs (`amdgpu`) and compute partitions (`amdgpu-partition`, with `partitionProfile` /
   `deviceID` / `parentDeviceID`) are parsed. Discovery also matches exporter pods whose name, image or labels mention
-  `amd` or `rocm`.
+  `amd` as a word of its own (`amd.com`, `amd-device-metrics-exporter`, but not `amd64`) or `rocm`.
 
 ## 1.0.0
 

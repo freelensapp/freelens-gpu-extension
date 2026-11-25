@@ -15,6 +15,8 @@ type FakePod = {
   limits?: Record<string, string>;
   scheduled?: { status: string; reason?: string; message?: string };
   ports?: number[];
+  image?: string;
+  labels?: Record<string, string>;
 };
 
 const pod = (p: FakePod) => ({
@@ -25,12 +27,12 @@ const pod = (p: FakePod) => ({
   getContainers: () => [
     {
       name: "c",
-      image: "app:1",
+      image: p.image ?? "app:1",
       resources: { limits: p.limits ?? {} },
       ports: (p.ports ?? []).map((containerPort) => ({ containerPort })),
     },
   ],
-  metadata: { labels: {}, annotations: {}, creationTimestamp: "2026-09-24T10:00:00Z" },
+  metadata: { labels: p.labels ?? {}, annotations: {}, creationTimestamp: "2026-09-24T10:00:00Z" },
   status: { conditions: p.scheduled ? [{ type: "PodScheduled", ...p.scheduled }] : [] },
 });
 
@@ -499,6 +501,59 @@ describe("GpuScraper discovery keywords", () => {
     expect(s.lastProbes.map((p) => p.target).sort()).toEqual([
       "gpu-operator/nvidia-dcgm-exporter-x1:9400",
       `kube-system/dcgm-exporter-${node}:9400`,
+    ]);
+  });
+
+  it("does not take amd64 for the AMD keyword, but still finds an AMD exporter by name, image or label", async () => {
+    const pods = [
+      // The CPU architecture is not a GPU hint, in a name, an image or a label.
+      pod({ ns: "kube-system", name: "kube-proxy-amd64-x1", phase: "Running", node: "n1", ports: [10249] }),
+      pod({
+        ns: "web",
+        name: "api-0",
+        phase: "Running",
+        node: "n1",
+        ports: [8080],
+        image: "registry.example.com/api:1.2-linux-amd64",
+      }),
+      pod({
+        ns: "web",
+        name: "worker-0",
+        phase: "Running",
+        node: "n1",
+        ports: [8081],
+        labels: { "kubernetes.io/arch": "amd64" },
+      }),
+      // AMD exporters: "amd" as a word of the pod name, the ROCm image of the AMD GPU Operator, an amd.com label.
+      pod({ ns: "kube-amd-gpu", name: "amd-device-metrics-exporter-x1", phase: "Running", node: "n1", ports: [5000] }),
+      pod({
+        ns: "operator",
+        name: "config-metrics-exporter-x2",
+        phase: "Running",
+        node: "n1",
+        ports: [5001],
+        image: "docker.io/rocm/device-metrics-exporter:v1.5.3",
+      }),
+      pod({
+        ns: "monitoring",
+        name: "exporter-x3",
+        phase: "Running",
+        node: "n1",
+        ports: [5002],
+        labels: { "app.kubernetes.io/vendor": "amd" },
+      }),
+    ];
+    const s = new GpuScraper({
+      clusterId: () => "c1",
+      listPods: async () => pods as never,
+      listServices: async () => [],
+      fetchText: async () => "",
+    });
+    await expect(s.snapshot()).rejects.toThrow(/No GPU metrics exporter found/);
+    expect(s.lastProbes.map((p) => p.target).sort()).toEqual([
+      "kube-amd-gpu/amd-device-metrics-exporter-x1:5000",
+      "monitoring/exporter-x3:5002",
+      "operator/config-metrics-exporter-x2:5001",
     ]);
   });
 });

@@ -73,7 +73,7 @@ are blacked out.
 
 | Source | Found through | Attribution |
 | --- | --- | --- |
-| NVIDIA dcgm-exporter with pod labels (`--kubernetes`, the GPU Operator default) | Running pods whose name, image or labels mention `dcgm`, `gpu`, `nvidia`, `cuda`, `amd` or `rocm`, probed on `/metrics` and classified by content (`DCGM_FI_DEV_*`) | One row per pod, one per MIG slice on partitioned cards |
+| NVIDIA dcgm-exporter with pod labels (`--kubernetes`, the GPU Operator default) | Running pods whose name, image or labels mention `dcgm`, `gpu`, `nvidia`, `cuda`, `rocm` or `amd` (as a word, not `amd64`), probed on `/metrics` and classified by content (`DCGM_FI_DEV_*`) | One row per pod, one per MIG slice on partitioned cards |
 | dcgm-exporter without pod labels | The same probe | One row per (node, GPU) with the candidate pods of that node |
 | Per-process exporter | `/metrics` emitting `gpu_process_memory_bytes` with `namespace` and `pod` labels | Per process, also for workloads that bypass the device plugin with `NVIDIA_VISIBLE_DEVICES=all`; power split by VRAM share |
 | AMD Device Metrics Exporter | `/metrics` emitting `amd_gpu_gfx_activity` or `amd_gpu_used_vram` (port 5000) | One row per pod the exporter attributes, from the device plugin or from a DRA `ResourceClaim`; device gauges (util, VRAM, package power, uncorrectable ECC) are not summed when repeated |
@@ -120,7 +120,7 @@ You can also build and pack the extension yourself, see
 ## Features
 
 - **Autodiscovery**: lists pods, keeps Running ones whose name, image or
-  labels mention `dcgm`, `gpu`, `nvidia`, `cuda`, `amd` or `rocm`, probes each
+  labels mention `dcgm`, `gpu`, `nvidia`, `cuda`, `rocm` or `amd` (as a word, not `amd64`), probes each
   `/metrics` and classifies by content: NVIDIA **dcgm-exporter**
   (`DCGM_FI_DEV_*`) or a **per-process exporter** (`gpu_process_memory_bytes`).
   Nothing to configure, nothing to deploy. If discovery misses yours, **pin**

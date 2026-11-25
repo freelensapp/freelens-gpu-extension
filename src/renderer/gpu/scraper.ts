@@ -56,7 +56,12 @@ import type { ExporterPod, ExporterScrape, GpuDevice, GpuRequests, PodGPU, PodSt
 
 type Pod = Renderer.K8sApi.Pod;
 
-const GPU_KEYWORDS = ["dcgm", "gpu", "nvidia", "cuda", "amd", "rocm"];
+const GPU_KEYWORDS = ["dcgm", "gpu", "nvidia", "cuda", "rocm"];
+/**
+ * "amd" as a word of its own (amd.com/gpu, amd-device-metrics-exporter), not as the start of another word: "amd64" is
+ * the CPU architecture of most images and labels, and would make nearly every pod of an x86 cluster a candidate.
+ */
+const AMD_WORD = /(^|[^a-z0-9])amd($|[^a-z0-9])/;
 const PROBE_TIMEOUT_MS = 5_000;
 const SCRAPE_TIMEOUT_MS = 15_000;
 /** Discovery (pod list, probes) and the Prometheus search are reused this long, also when they found nothing. */
@@ -122,7 +127,7 @@ function containersReady(pod: Pod): boolean {
 
 function looksGpuRelated(pod: Pod): boolean {
   const hay = podHaystack(pod);
-  return GPU_KEYWORDS.some((k) => hay.includes(k));
+  return GPU_KEYWORDS.some((k) => hay.includes(k)) || AMD_WORD.test(hay);
 }
 
 /** annotation prometheus.io/port > container port named "metrics" > first port. */
