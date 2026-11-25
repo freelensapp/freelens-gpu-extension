@@ -241,8 +241,9 @@ a MobX store that polls every 20 s while a GPU view is mounted.
   query API when the cluster has one with the GPU series (it needs
   `list services` and `get services/proxy`); otherwise it is kept in memory
   while Freelens is open and starts again at every launch. The history is
-  read in steps of 5 minutes (24 h) or 30 minutes (7 d): the peaks are exact,
-  and the last busy moment is known to the step. It follows the pod by name,
+  read in steps of 5 minutes (24 h) or 30 minutes (7 d), and read again only
+  when a new step has closed: the peaks are exact, and the last busy moment
+  is known to the step. It follows the pod by name,
   so a pod that was recreated starts again.
 
 ## Development

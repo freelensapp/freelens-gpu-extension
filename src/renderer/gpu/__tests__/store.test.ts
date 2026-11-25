@@ -1,6 +1,6 @@
 import { autorun, isObservableProp, runInAction } from "mobx";
-import { describe, expect, it } from "vitest";
-import { GpuStore } from "../store";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { GpuStore, LOOKBACK_LAG_MS } from "../store";
 
 import type { Snapshot } from "../types";
 
@@ -144,5 +144,87 @@ describe("GpuStore lookback", () => {
     await store.refreshLookback();
     expect(store.lookback?.window).toBe("24h");
     expect(store.idleRows[0].lookback).toBeDefined();
+  });
+
+  describe("schedule", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    /** A scraper that counts its reads, per window. */
+    const countingScraper = () => {
+      const reads: string[] = [];
+      return {
+        reads,
+        scraper: {
+          pins: [],
+          lookback: async (window: string) => {
+            reads.push(window);
+            return undefined;
+          },
+        } as never,
+      };
+    };
+
+    it("reads each window again only when a step of it has closed", async () => {
+      vi.useFakeTimers();
+      // just after a 30 min step boundary has become readable
+      const t0 = Date.UTC(2026, 10, 25, 10, 0, 0) + LOOKBACK_LAG_MS;
+      vi.setSystemTime(t0);
+      const { reads, scraper } = countingScraper();
+      const store = new GpuStore(scraper);
+
+      const stop = store.subscribeLookback();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reads).toEqual(["7d"]);
+
+      // 7 d moves by 30 min: nothing new to read for 29 minutes
+      await vi.advanceTimersByTimeAsync(29 * 60_000);
+      expect(reads).toEqual(["7d"]);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(reads).toEqual(["7d", "7d"]);
+
+      // 24 h moves by 5 min: read at once on the switch, then every 5 minutes
+      store.setLookbackWindow("24h");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reads).toEqual(["7d", "7d", "24h"]);
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      expect(reads).toEqual(["7d", "7d", "24h", "24h", "24h", "24h"]);
+
+      stop();
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(reads).toHaveLength(6);
+    });
+
+    it("does not read again when the view is reopened within the same step", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.UTC(2026, 10, 25, 10, 0, 0) + LOOKBACK_LAG_MS);
+      const { reads, scraper } = countingScraper();
+      const store = new GpuStore(scraper);
+      store.subscribeLookback()();
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      store.subscribeLookback()();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reads).toEqual(["7d"]);
+    });
+
+    it("tries a failed read again after 5 minutes, also on the 7 d window", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.UTC(2026, 10, 25, 10, 0, 0) + LOOKBACK_LAG_MS);
+      let calls = 0;
+      const store = new GpuStore({
+        pins: [],
+        lookback: async () => {
+          calls++;
+          throw new Error("HTTP 503 Service Unavailable");
+        },
+      } as never);
+      const stop = store.subscribeLookback();
+      await vi.advanceTimersByTimeAsync(4 * 60_000);
+      expect(calls).toBe(1);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(calls).toBe(2);
+      stop();
+    });
   });
 });

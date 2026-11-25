@@ -27,7 +27,7 @@ podsApi.list()  ──▶ candidates (Running, name/image/labels ∋ dcgm|gpu|nv
                 nodesApi.list() capacity / allocatable                          ┴──▶ AllocationRow[] (Allocation view)
                 store.history (per pod, 6 h, in memory)                        ┐
                 query_range max_over_time(<metric>[step]) on a query API,       ┴──▶ IdleRow[]      (Idle & waste view)
-                  24 h or 7 d, every 5 min while the view is open (lookback.ts)
+                  24 h or 7 d, read again when a step closes (lookback.ts)
                 scraper.lastProbes + per-exporter latency/bytes/error           ──▶ Exporters view
 ```
 

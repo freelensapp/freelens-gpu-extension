@@ -7,8 +7,8 @@
   also when the live numbers come from the exporter pods. "Idle for" reaches back to the pod's last busy moment
   instead of to the moment Freelens opened, with `≥` for a pod that was never seen busy; **Idle share** is the part
   of the window the pod spent under 5 % utilisation, and **Peak VRAM** is the most it held. One range query per
-  metric (`max_over_time` per step, so short bursts count), every 5 minutes while the view is open, through the
-  service proxy: it needs `list services` and `get services/proxy`, and without them or without a query API the view
+  metric (`max_over_time` per step, so short bursts count), read again while the view is open only when a step of
+  the window has closed (every 5 minutes for 24 h, every 30 minutes for 7 d), through the service proxy: it needs `list services` and `get services/proxy`, and without them or without a query API the view
   works as before. The snapshot (Copy JSON, Copy Markdown) carries the new numbers.
 - The Prometheus fallback and the history try the Prometheus set in the cluster settings of Freelens (Metrics:
   service address, path prefix such as `/prometheus` for Mimir, HTTPS) before pinned and discovered query APIs, and

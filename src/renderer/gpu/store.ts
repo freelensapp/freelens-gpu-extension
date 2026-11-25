@@ -20,9 +20,10 @@ import {
   totalPowerW,
 } from "./aggregate";
 import { type InferenceLevel, inferenceStatus, type VllmRates, type VllmSample, vllmRates } from "./inference";
-import { idleStretch, type LookbackWindow, type PodLookback, podLookbacks } from "./lookback";
+import { idleStretch, type LookbackWindow, lookbackRange, type PodLookback, podLookbacks } from "./lookback";
 import { aggregateNamespaces, migFree, type NamespaceRow } from "./namespaces";
 import { explainPending, type NodeGpuResources, type PendingGpuPod } from "./pending";
+import { formatPromTarget } from "./prometheus";
 import { DISCOVERY_TTL_MS, GpuScraper, type InferenceScrape, type ProbeResult } from "./scraper";
 import { formatTarget, isTarget, parseTarget, type Target } from "./targets";
 
@@ -34,13 +35,23 @@ const STALE_MS = 30_000;
 const HISTORY_MS = 6 * 60 * 60_000; // keep up to 6h of samples per pod
 export const IDLE_UTIL_PCT = 5;
 export const IDLE_MIN_VRAM_MIB = 256;
-/** The lookback moves by one step (5 or 30 min) at a time; reading it more often returns the same steps. */
-const LOOKBACK_INTERVAL_MS = 5 * 60_000;
+/**
+ * How often the Idle & waste view checks whether its window has a new step. The history moves by one step at a time
+ * (5 min for 24 h, 30 min for 7 d), so it is read again only when a step has closed: reading the 7 d window, the
+ * heaviest query, every 5 minutes would bring back the same steps five times out of six.
+ */
+const LOOKBACK_TICK_MS = 60_000;
+/** A step is read once it closed this long ago, so the query API has ingested its last scrapes. */
+export const LOOKBACK_LAG_MS = 60_000;
+/** A read that failed is tried again after this long, whatever the step of the window. */
+const LOOKBACK_RETRY_MS = 5 * 60_000;
 
 /** The last lookback read from the query API of the cluster. */
 export interface LookbackState {
   window: LookbackWindow;
   fetchedAt: number;
+  /** End of the newest step read, in seconds; the next read is due when a later step has closed. */
+  endS: number;
   /** "namespace/svc/name:port" of the query API; undefined when the cluster has none with GPU series. */
   source?: string;
   byPod: Map<string, PodLookback>;
@@ -501,18 +512,21 @@ export class GpuStore {
   refreshLookback(): Promise<void> {
     if (this.lookbackInflight) return this.lookbackInflight;
     const window = this.lookbackWindow;
+    const asOf = Date.now() - LOOKBACK_LAG_MS;
+    const { endS } = lookbackRange(asOf, window);
     runInAction(() => {
       this.lookbackLoading = true;
     });
     this.lookbackInflight = this.scraper
-      .lookback(window)
+      .lookback(window, asOf)
       .then((res): LookbackState => {
-        if (!res) return { window, fetchedAt: Date.now(), byPod: new Map() };
+        if (!res) return { window, fetchedAt: Date.now(), endS, byPod: new Map() };
         const { target, stepS, results } = res;
         return {
           window,
           fetchedAt: Date.now(),
-          source: `${target.namespace}/svc/${target.name}:${target.port}`,
+          endS,
+          source: `${formatPromTarget(target)}${target.origin === "cluster-settings" ? " (Freelens cluster settings)" : ""}`,
           byPod: podLookbacks(results, stepS, IDLE_UTIL_PCT),
         };
       })
@@ -520,6 +534,7 @@ export class GpuStore {
         (e): LookbackState => ({
           window,
           fetchedAt: Date.now(),
+          endS,
           byPod: new Map(),
           error: e instanceof Error ? e.message : String(e),
         }),
@@ -544,13 +559,28 @@ export class GpuStore {
     void (this.lookbackInflight ?? Promise.resolve()).then(() => this.refreshLookback());
   }
 
-  /** Reference-counted like subscribe(): the Idle & waste view reads the lookback while it is mounted. */
-  subscribeLookback(intervalMs = LOOKBACK_INTERVAL_MS): () => void {
+  /**
+   * Whether the lookback should be read again: none yet, another window, a step of the window closed since the last
+   * read, or the last read failed a while ago.
+   */
+  lookbackDue(nowMs = Date.now()): boolean {
+    const lb = this.lookback;
+    if (!lb || lb.window !== this.lookbackWindow) return true;
+    if (lb.error) return nowMs - lb.fetchedAt >= LOOKBACK_RETRY_MS;
+    return lookbackRange(nowMs - LOOKBACK_LAG_MS, lb.window).endS > lb.endS;
+  }
+
+  /**
+   * Reference-counted like subscribe(): the Idle & waste view reads the lookback while it is mounted, each window at
+   * its own step.
+   */
+  subscribeLookback(tickMs = LOOKBACK_TICK_MS): () => void {
     this.lookbackSubscribers++;
     if (!this.lookbackTimer) {
-      const fresh = this.lookback?.window === this.lookbackWindow && Date.now() - this.lookback.fetchedAt < intervalMs;
-      if (!fresh) void this.refreshLookback();
-      this.lookbackTimer = setInterval(() => void this.refreshLookback(), intervalMs);
+      if (this.lookbackDue()) void this.refreshLookback();
+      this.lookbackTimer = setInterval(() => {
+        if (!this.lookbackInflight && this.lookbackDue()) void this.refreshLookback();
+      }, tickMs);
     }
     return () => {
       this.lookbackSubscribers--;
