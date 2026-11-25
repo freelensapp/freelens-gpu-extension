@@ -127,9 +127,11 @@ You can also build and pack the extension yourself, see
   Exporters page (`namespace/pod-prefix:port`).
 - **Prometheus fallback**: when no exporter pod answers, reads the same
   metrics from a Prometheus, Thanos, VictoriaMetrics or Mimir query API
-  already in the cluster (found automatically, or pinned as
-  `namespace/svc/name:port`) through the service proxy, repairing the labels
-  Prometheus rewrites.
+  already in the cluster through the service proxy, repairing the labels
+  Prometheus rewrites. The one set in the cluster settings of Freelens
+  (Metrics: service address and path prefix, such as `/prometheus` for
+  Mimir) is tried first, then pinned ones (`namespace/svc/name:port`), then
+  the ones found automatically.
 - **History from Prometheus**: with such a query API in the cluster, **Idle &
   waste** reaches back 24 hours or 7 days instead of to the moment Freelens
   opened: how long each pod has really been idle, the share of the window it

@@ -657,4 +657,84 @@ describe("GpuScraper lookback", () => {
     });
     await expect(s.lookback("7d")).rejects.toThrow("HTTP 503");
   });
+
+  describe("the Prometheus set in the cluster settings of Freelens", () => {
+    const mimir = {
+      namespace: "mimir",
+      name: "mimir-query-frontend",
+      port: 8080,
+      prefix: "/prometheus",
+      https: false,
+      origin: "cluster-settings" as const,
+    };
+    const discovered = [{ namespace: "mon", name: "prometheus-server", ports: [{ name: "http", port: 80 }] }];
+
+    it("is tried first, with its prefix, and services are not listed when it has the GPU series", async () => {
+      let listed = 0;
+      const paths: string[] = [];
+      const s = new GpuScraper({
+        clusterId: () => "c1",
+        listPods: async () => [],
+        listServices: async () => {
+          listed++;
+          return discovered;
+        },
+        clusterPrometheus: () => mimir,
+        fetchText: async (_c, path) => {
+          paths.push(path);
+          return path.includes("count(") ? countOk : empty;
+        },
+      });
+      const lb = await s.lookback("24h", 1_800_000_000_000);
+      expect(lb?.target).toEqual(mimir);
+      expect(listed).toBe(0);
+      expect(
+        paths.every((p) =>
+          p.startsWith("/api/v1/namespaces/mimir/services/mimir-query-frontend:8080/proxy/prometheus/api/v1/"),
+        ),
+      ).toBe(true);
+      expect(s.lastProbes).toContainEqual({
+        target: "prometheus mimir/svc/mimir-query-frontend:8080/prometheus (Freelens cluster settings)",
+        outcome: "prometheus",
+      });
+    });
+
+    it("falls back to pins and discovery when it has no GPU series, and is not probed twice", async () => {
+      const probed: string[] = [];
+      const s = new GpuScraper({
+        clusterId: () => "c1",
+        listPods: async () => [],
+        listServices: async () => [
+          ...discovered,
+          { namespace: "mimir", name: "mimir-query-frontend", ports: [{ name: "http", port: 8080 }] },
+        ],
+        clusterPrometheus: () => mimir,
+        fetchText: async (_c, path) => {
+          if (!path.includes("count(")) return empty;
+          probed.push(path.split("/proxy")[0]);
+          return path.includes("/mimir/") ? empty : countOk;
+        },
+      });
+      const lb = await s.lookback("7d", 1_800_000_000_000);
+      expect(lb?.target).toEqual({ namespace: "mon", name: "prometheus-server", port: 80 });
+      expect(probed).toEqual([
+        "/api/v1/namespaces/mimir/services/mimir-query-frontend:8080",
+        "/api/v1/namespaces/mon/services/prometheus-server:80",
+      ]);
+      expect(s.lastProbes[0]).toMatchObject({ outcome: "unrecognised" });
+    });
+
+    it("is skipped when the cluster entity cannot be read", async () => {
+      const s = new GpuScraper({
+        clusterId: () => "c1",
+        listPods: async () => [],
+        listServices: async () => discovered,
+        clusterPrometheus: () => {
+          throw new Error("no catalog in this frame");
+        },
+        fetchText: async (_c, path) => (path.includes("count(") ? countOk : empty),
+      });
+      expect((await s.lookback("7d", 1_800_000_000_000))?.target.name).toBe("prometheus-server");
+    });
+  });
 });

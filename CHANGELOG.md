@@ -10,6 +10,9 @@
   metric (`max_over_time` per step, so short bursts count), every 5 minutes while the view is open, through the
   service proxy: it needs `list services` and `get services/proxy`, and without them or without a query API the view
   works as before. The snapshot (Copy JSON, Copy Markdown) carries the new numbers.
+- The Prometheus fallback and the history try the Prometheus set in the cluster settings of Freelens (Metrics:
+  service address, path prefix such as `/prometheus` for Mimir, HTTPS) before pinned and discovered query APIs, and
+  list no services when it has the GPU series.
 
 ## 1.0.0
 

@@ -166,7 +166,7 @@ const LookbackNote = observer(() => {
           ? `History could not be read (${lb.error}), so "Idle for" counts from when this Freelens window opened.`
           : lb.source
             ? `History of the last ${windowLabel()} from ${lb.source}: "Idle for" reaches back to the last busy moment, and Idle share and Peak VRAM cover that window.`
-            : 'No Prometheus-compatible query API with GPU series was found, so "Idle for" counts from when this Freelens window opened (pin one on the Exporters page).'}{" "}
+            : 'No Prometheus-compatible query API with GPU series was found, so "Idle for" counts from when this Freelens window opened (set yours in the cluster settings of Freelens, under Metrics, or pin it on the Exporters page).'}{" "}
       {(Object.keys(LOOKBACK_WINDOWS) as LookbackWindow[]).map((w) => (
         <button
           key={w}

@@ -8,7 +8,7 @@
  * scraper does the requests.
  */
 
-import { type PromTarget, repairLabels } from "./prometheus";
+import { type PromTarget, promApiPath, repairLabels } from "./prometheus";
 
 import type { HistoryPoint } from "./types";
 
@@ -41,10 +41,7 @@ export function lookbackRange(nowMs: number, window: LookbackWindow): { startS: 
 }
 
 export function promRangePath(t: PromTarget, query: string, startS: number, endS: number, stepS: number): string {
-  return (
-    `/api/v1/namespaces/${t.namespace}/services/${t.name}:${t.port}/proxy/api/v1/query_range` +
-    `?query=${encodeURIComponent(query)}&start=${startS}&end=${endS}&step=${stepS}`
-  );
+  return promApiPath(t, "query_range", { query, start: startS, end: endS, step: stepS });
 }
 
 export interface PodLookback {

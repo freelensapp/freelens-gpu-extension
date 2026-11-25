@@ -18,6 +18,67 @@ export interface PromTarget {
   namespace: string;
   name: string;
   port: number;
+  /** Path the query API is served under, e.g. "/prometheus" for Mimir; "" at the root. */
+  prefix?: string;
+  /** The service speaks HTTPS (the apiserver proxies to "https:name:port"). */
+  https?: boolean;
+  /** Where the target comes from, for the Exporters page; undefined for pins and auto-discovery. */
+  origin?: "cluster-settings";
+}
+
+/** "/prometheus/" or "prometheus" -> "/prometheus"; "" or "/" -> "". */
+export function normalizePrefix(prefix: string | undefined): string {
+  const trimmed = (prefix ?? "").trim().replace(/^\/+|\/+$/g, "");
+  return trimmed ? `/${trimmed}` : "";
+}
+
+/** "namespace/svc/name:port" plus the prefix, as pins are written and the Exporters page shows them. */
+export function formatPromTarget(t: PromTarget): string {
+  return `${t.namespace}/svc/${t.https ? "https:" : ""}${t.name}:${t.port}${normalizePrefix(t.prefix)}`;
+}
+
+/** Service-proxy path of an endpoint of the query API, e.g. "query" or "query_range". */
+export function promApiPath(t: PromTarget, endpoint: string, params: Record<string, string | number>): string {
+  const query = Object.entries(params)
+    .map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`)
+    .join("&");
+  const svc = `${t.https ? "https:" : ""}${t.name}:${t.port}`;
+  return `/api/v1/namespaces/${t.namespace}/services/${svc}/proxy${normalizePrefix(t.prefix)}/api/v1/${endpoint}?${query}`;
+}
+
+/** The Prometheus set in the cluster settings of Freelens (Metrics), as the cluster entity carries it. */
+export interface ClusterPrometheusSetting {
+  namespace?: string;
+  service?: string;
+  port?: number | string;
+  prefix?: string;
+  https?: boolean;
+}
+
+const K8S_NAME = /^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/;
+/**
+ * Path segments of letters, digits and -._~ only, none of them "." or "..": the prefix ends up in a URL path under the
+ * service proxy, and must not climb out of it to other apiserver paths.
+ */
+const PREFIX = /^(\/(?!\.{1,2}(?:\/|$))[A-Za-z0-9._~-]+)*$/;
+
+/**
+ * The query API set in Freelens for this cluster, or undefined when none is set, it is incomplete, or a part of it
+ * would not be a valid path (it is user input, like a pin).
+ */
+export function clusterSettingTarget(address: ClusterPrometheusSetting | undefined): PromTarget | undefined {
+  const port = Number(address?.port);
+  if (!address?.namespace || !address.service || !Number.isInteger(port) || port < 1 || port > 65535) return undefined;
+  if (!K8S_NAME.test(address.namespace) || !K8S_NAME.test(address.service)) return undefined;
+  if (!PREFIX.test(normalizePrefix(address.prefix))) return undefined;
+  return {
+    namespace: address.namespace,
+    name: address.service,
+    port,
+    prefix: normalizePrefix(address.prefix),
+    https: address.https === true,
+    origin: "cluster-settings",
+  };
 }
 
 const QUERY_API = /prometheus|thanos-query|thanos-querier|vmselect|vmsingle|victoria-metrics|mimir-query|querier/i;
@@ -43,7 +104,7 @@ export function promCandidates(services: ServiceLike[]): PromTarget[] {
 }
 
 export function promQueryPath(t: PromTarget, query: string): string {
-  return `/api/v1/namespaces/${t.namespace}/services/${t.name}:${t.port}/proxy/api/v1/query?query=${encodeURIComponent(query)}`;
+  return promApiPath(t, "query", { query });
 }
 
 export const selectorFor = (names: string[]): string => `{__name__=~"${names.join("|")}"}`;
