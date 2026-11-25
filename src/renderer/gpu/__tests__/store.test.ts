@@ -101,7 +101,7 @@ describe("GpuStore lookback", () => {
     });
 
     // without the lookback: nothing older than this session is known
-    expect(store.idleRows[0]).toMatchObject({ idleAtLeast: true, peakUtilPct: 0 });
+    expect(store.idleRows[0]).toMatchObject({ idleAtLeast: false, peakUtilPct: 0 });
     expect(store.idleRows[0].idleMinutes).toBeLessThan(1);
     expect(store.idleRows[0].lookback).toBeUndefined();
 
@@ -126,7 +126,7 @@ describe("GpuStore lookback", () => {
     expect(store.lookback).toMatchObject({ error: "HTTP 403 Forbidden" });
     expect(store.lookback?.source).toBeUndefined();
     expect(store.lookbackLoading).toBe(false);
-    expect(store.idleRows[0]).toMatchObject({ idleAtLeast: true });
+    expect(store.idleRows[0]).toMatchObject({ idleAtLeast: false });
     expect(store.idleRows[0].lookback).toBeUndefined();
   });
 

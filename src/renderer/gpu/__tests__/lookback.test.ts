@@ -237,8 +237,9 @@ describe("idleStretch", () => {
       atLeast: true,
       from: "lookback",
     });
-    // without a lookback the session is all there is, and it is a lower bound too
-    expect(idleStretch(h, undefined, now, 5)).toMatchObject({ since: now - 60_000, atLeast: true, from: "session" });
+    // without a lookback the session is all there is, shown as it is without a query API
+    expect(idleStretch(h, undefined, now, 5)).toMatchObject({ since: now - 60_000, atLeast: false, from: "session" });
+    expect(idleStretch([], undefined, now, 5)).toMatchObject({ since: now, atLeast: false, from: "session" });
   });
 
   it("takes a burst the lookback caught between two idle scrapes of the session", () => {

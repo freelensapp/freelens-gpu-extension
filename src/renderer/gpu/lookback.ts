@@ -209,7 +209,7 @@ export interface IdleStretch {
   since: number;
   /** Samples of the session behind it (0 when it rests on the lookback alone). */
   samples: number;
-  /** The pod may have been idle for longer: nothing older is known, and no busy moment was seen. */
+  /** The pod may have been idle for longer: the lookback has it idle from its first sample on, never busy. */
   atLeast: boolean;
   /** Where `since` comes from. */
   from: "session" | "lookback";
@@ -221,6 +221,7 @@ export interface IdleStretch {
  * The session history is sampled every scrape and is the newest evidence: a busy sample in it ends the question.
  * When the whole session is idle, the lookback says how far back the stretch reaches: to its last busy step, or,
  * for a pod it never saw busy, to the first sample it has (the pod may have been idle for longer than that).
+ * Without a lookback for the pod, the stretch is the session's, as it is without a query API.
  */
 export function idleStretch(
   history: HistoryPoint[],
@@ -239,5 +240,6 @@ export function idleStretch(
   if (lookback?.utilFrom !== undefined && lookback.utilFrom < sessionSince) {
     return { since: lookback.utilFrom, samples, atLeast: true, from: "lookback" };
   }
-  return { since: sessionSince, samples, atLeast: true, from: "session" };
+  // Nothing older than the session is known: the number is the session's, shown as it is without a history.
+  return { since: sessionSince, samples, atLeast: false, from: "session" };
 }
