@@ -96,7 +96,7 @@ function stepsOf(m: Map<string, PodSteps>, pod: string): PodSteps {
 /**
  * Range-query results, one per metric, into what each pod ("namespace/pod") did over the range.
  *
- * Same rules as the live view: the labels Prometheus rewrote are repaired and HA copies of a series are dropped;
+ * Same rules as the live view: the labels Prometheus rewrote are repaired and the copies of a series are merged;
  * a pod the per-process exporter reports is taken from it, since it splits a shared device per pod and dcgm-exporter
  * does not; DCGM_FI_DEV_GPU_UTIL wins over the profiling counter, which stands in for it on MIG slices.
  */
@@ -114,7 +114,9 @@ export function podLookbacks(
       throw new Error(`not a Prometheus API response (${json.slice(0, 80)})`);
     }
     if (parsed.status !== "success") throw new Error(parsed.error ?? "query failed");
-    const seen = new Set<string>();
+    // The copies of one series differ only in labels repairLabels drops: an HA pair, or the two halves of a series
+    // whose exporter pod was replaced inside the window (a new instance). Merge them, each step once at its maximum.
+    const merged = new Map<string, { pod: string; values: Map<number, number> }>();
     for (const r of parsed.data?.result ?? []) {
       const { labels } = repairLabels(r.metric);
       if (!labels.pod) continue;
@@ -122,12 +124,19 @@ export function podLookbacks(
         .sort()
         .map((k) => `${k}=${labels[k]}`)
         .join(",");
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const pod = `${labels.namespace ?? ""}/${labels.pod}`;
+      let entry = merged.get(key);
+      if (!entry) {
+        entry = { pod: `${labels.namespace ?? ""}/${labels.pod}`, values: new Map() };
+        merged.set(key, entry);
+      }
       for (const [t, raw] of r.values ?? []) {
         const v = Number(raw);
         if (!Number.isFinite(v)) continue;
+        entry.values.set(t, Math.max(entry.values.get(t) ?? v, v));
+      }
+    }
+    for (const { pod, values } of merged.values()) {
+      for (const [t, v] of values) {
         switch (metric) {
           case "DCGM_FI_DEV_GPU_UTIL": {
             const s = stepsOf(src.dcgmUtil, pod).util;

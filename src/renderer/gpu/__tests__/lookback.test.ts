@@ -158,6 +158,51 @@ describe("podLookbacks", () => {
   });
 });
 
+describe("a pod whose series is split by a replaced exporter", () => {
+  const before = { gpu: "0", UUID: "GPU-a", namespace: "ml", pod: "trainer-1", instance: "10.244.1.9:9400" };
+  const after = { ...before, instance: "10.244.1.5:9400" };
+
+  for (const [name, order] of [
+    ["the older half first", [0, 1]],
+    ["the newer half first", [1, 0]],
+  ] as const) {
+    it(`reads both halves, ${name}`, () => {
+      // busy until step 2, idle from step 3; the exporter is replaced at step 4
+      const util = [series(before, [90, 95, 92, 0]), series(after, [0, 0, 0, 0], 4)];
+      const vram = [series(before, [78000, 70000, 70000, 70000]), series(after, [70000, 70000, 70000, 70000], 4)];
+      const lb = run({
+        DCGM_FI_DEV_GPU_UTIL: matrix(...order.map((i) => util[i])),
+        DCGM_FI_DEV_FB_USED: matrix(...order.map((i) => vram[i])),
+      }).get("ml/trainer-1");
+      expect(lb?.lastBusy).toBe(at(2) * 1000);
+      expect(lb?.idleShare).toBe(5 / 8);
+      expect(lb?.observedMs).toBe(8 * STEP * 1000);
+      expect(lb?.peakVramMiB).toBe(78000);
+    });
+  }
+
+  it("counts a step that both halves cover once", () => {
+    const lb = run({
+      DCGM_FI_DEV_GPU_UTIL: matrix(series(before, [0, 0, 0, 0]), series(after, [0, 0], 3)),
+      DCGM_FI_DEV_FB_USED: matrix(series(before, [70000, 70000, 70000, 70000]), series(after, [70000, 70000], 3)),
+    }).get("ml/trainer-1");
+    expect(lb?.peakVramMiB).toBe(70000);
+    expect(lb?.observedMs).toBe(5 * STEP * 1000);
+  });
+
+  it("still sums the devices of a pod, each merged on its own", () => {
+    const second = { ...before, gpu: "1", UUID: "GPU-b" };
+    const lb = run({
+      DCGM_FI_DEV_FB_USED: matrix(
+        series(before, [40000, 40000]),
+        series(after, [40000], 2),
+        series(second, [30000, 30000, 30000]),
+      ),
+    }).get("ml/trainer-1");
+    expect(lb?.peakVramMiB).toBe(70000);
+  });
+});
+
 describe("idleStretch", () => {
   const now = at(20) * 1000;
   const sample = (minutesAgo: number, utilPct: number) => ({ t: now - minutesAgo * 60_000, utilPct, vramUsedMiB: 1 });
