@@ -160,9 +160,9 @@ export const ExportersPage = observer(({ extension }: { extension: Renderer.Lens
       subtitle={
         <>
           How GPU metrics reach this view. Discovery lists pods, keeps Running ones whose name/image/labels mention
-          dcgm, gpu, nvidia or cuda, probes each <code>/metrics</code> through the apiserver pod-proxy and classifies by
-          content. If no exporter pod answers, a Prometheus-compatible query API in the cluster is used instead.
-          Discovery is cached for 60 s; Refresh re-runs it.
+          dcgm, gpu, nvidia, cuda, rocm or amd (as a word, not amd64), probes each <code>/metrics</code> through the
+          apiserver pod-proxy and classifies by content. If no exporter pod answers, a Prometheus-compatible query API
+          in the cluster is used instead. Discovery is cached for 60 s; Refresh re-runs it.
           {gpuStore.draNote && <div className="gpuext-hint">{gpuStore.draNote}</div>}
         </>
       }
