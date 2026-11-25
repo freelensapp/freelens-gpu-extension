@@ -290,6 +290,8 @@ describe("helpers", () => {
     expect(isGpuDeviceClass("gpu.nvidia.com")).toBe(true);
     expect(isGpuDeviceClass("mig.nvidia.com")).toBe(true);
     expect(isGpuDeviceClass("gpu.amd.com")).toBe(true);
+    expect(isGpuDeviceClass("amd.com")).toBe(false);
+    expect(isGpuDeviceClass("mig.amd.com")).toBe(false);
     expect(isGpuDeviceClass("compute-domain-daemon.nvidia.com")).toBe(false);
     expect(isGpuDeviceClass("gpu.example.com")).toBe(false);
   });

@@ -189,6 +189,45 @@ describe("GpuScraper AMD exporter", () => {
     const snap = await s.snapshot();
     expect(snap.gpus[0]).toMatchObject({ model: "AMD_Instinct_MI300X_OAM", utilPct: 2 });
   });
+
+  it("keeps the exporter's model when the node's AMD DRA devices name two products", async () => {
+    const body = readFileSync(join(__dirname, "fixtures", "amd_device_metrics.prom"), "utf8").replaceAll(
+      'card_model="AMD Radeon 8060S Graphics"',
+      'card_model="102-G30211-0C"',
+    );
+    const device = (name: string, product: string) => ({
+      name,
+      attributes: { type: { string: "amdgpu" }, productName: { string: product } },
+    });
+    const slices = JSON.stringify({
+      items: [
+        {
+          spec: {
+            driver: "gpu.amd.com",
+            nodeName: "n1",
+            pool: { name: "n1" },
+            devices: [device("gpu-0", "AMD_Instinct_MI300X_OAM"), device("gpu-1", "AMD_Instinct_MI325X_OAM")],
+          },
+        },
+      ],
+    });
+    const exporter = pod({
+      ns: "kube-amd-gpu",
+      name: "amdgpu-metrics-exporter-x",
+      phase: "Running",
+      node: "n1",
+      ports: [5000],
+    });
+    const s = new GpuScraper({
+      clusterId: () => "c1",
+      listPods: async () => [exporter] as never,
+      listServices: async () => [],
+      fetchText: async () => body,
+      fetchDra: async (_id, path) => (path.endsWith("/resourceslices") ? slices : JSON.stringify({ items: [] })),
+    });
+    const snap = await s.snapshot();
+    expect(snap.gpus[0]).toMatchObject({ model: "102-G30211-0C" });
+  });
 });
 
 describe("GpuScraper discovery sources", () => {

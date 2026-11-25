@@ -14,9 +14,9 @@
 /** DRA drivers whose devices are GPUs: NVIDIA (whole GPUs and MIG) and AMD (whole GPUs and compute partitions). */
 export const DRA_GPU_DRIVERS: ReadonlySet<string> = new Set(["gpu.nvidia.com", "gpu.amd.com"]);
 
-/** Device classes that select GPUs: gpu.nvidia.com, mig.nvidia.com, gpu.amd.com, and the like (not ComputeDomain). */
+/** Device classes that select GPUs: gpu.nvidia.com, mig.nvidia.com and gpu.amd.com (not ComputeDomain). */
 export function isGpuDeviceClass(name: string): boolean {
-  if (/(^|\.)amd\.com$/.test(name)) return true;
+  if (name === "gpu.amd.com") return true;
   return /(^|\.)nvidia\.com$/.test(name) && !/compute-domain/.test(name);
 }
 

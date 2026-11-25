@@ -696,8 +696,15 @@ export class GpuScraper {
    * (AMD_Instinct_MI300X_OAM). When the node has AMD DRA devices, their productName is the model shown.
    */
   private withDraProduct(d: GpuDevice): GpuDevice {
-    const product = this.dra?.devicesByNode.get(d.node)?.find((x) => x.driver === "gpu.amd.com" && x.product)?.product;
-    return product ? { ...d, model: product } : d;
+    const products = new Set(
+      (this.dra?.devicesByNode.get(d.node) ?? [])
+        .filter((x) => x.driver === "gpu.amd.com" && x.product)
+        .map((x) => x.product),
+    );
+    // One product on the node names every card. With two, the claims cannot say which card is which, so the exporter's
+    // own model stays.
+    const [product] = products;
+    return products.size === 1 && product ? { ...d, model: product } : d;
   }
 
   /** Scraped families (from exporter pods or a Prometheus) → rows and devices. */
@@ -732,20 +739,21 @@ export class GpuScraper {
       }
       rows = rows.concat(dcgmRows);
     }
+    // Each AMD exporter is aggregated once: its rows and its devices both come from the same view.
+    const amdViews = amds.map((b) => ({ ex: b.ex, view: aggregateAmd(b.fams, b.ex.nodeName) }));
     const coveredNodes = new Set(rows.map((r) => r.node));
-    for (const b of amds) {
-      if (coveredNodes.has(b.ex.nodeName)) continue;
-      const amd = aggregateAmd(b.fams, b.ex.nodeName);
-      if (amd.rows.length === 0) continue;
-      rows = rows.concat(amd.rows);
-      coveredNodes.add(b.ex.nodeName);
+    for (const { ex, view } of amdViews) {
+      if (coveredNodes.has(ex.nodeName)) continue;
+      if (view.rows.length === 0) continue;
+      rows = rows.concat(view.rows);
+      coveredNodes.add(ex.nodeName);
     }
 
     // Devices: prefer DCGM (true device gauges); AMD, then the per-process exporter, cover the other nodes.
     let gpus: GpuDevice[] = dcgms.flatMap((b) => aggregateDevicesDcgm(b.fams, b.ex.nodeName));
-    if (amds.length > 0) {
+    if (amdViews.length > 0) {
       const covered = new Set(gpus.map((d) => d.node));
-      const fromAmd = amds.flatMap((b) => aggregateAmd(b.fams, b.ex.nodeName).devices);
+      const fromAmd = amdViews.flatMap((v) => v.view.devices);
       gpus = gpus.concat(fromAmd.filter((d) => !covered.has(d.node)).map((d) => this.withDraProduct(d)));
     }
     if (enrichers.length > 0) {
