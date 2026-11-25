@@ -148,6 +148,7 @@ export class GpuStore {
     const out: IdleRow[] = [];
     for (const r of this.rows) {
       if (r.gpuIndex) continue; // fallback rows have no pod identity
+      if (r.utilUnpublished) continue; // unmeasured, not idle: the exporter has no utilisation for its devices
       if (r.gpuUtilPct >= IDLE_UTIL_PCT || r.vramUsedMiB < IDLE_MIN_VRAM_MIB) continue;
       const h = this.history.get(`${r.namespace}/${r.pod}`) ?? [];
       // walk back from the newest sample while util stays below threshold

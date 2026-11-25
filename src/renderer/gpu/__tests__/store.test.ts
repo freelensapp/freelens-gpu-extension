@@ -46,4 +46,31 @@ describe("GpuStore", () => {
 
     expect(seen).toEqual([false, true]);
   });
+
+  it("lists an idle pod on Idle & waste but not one whose utilisation the exporter does not publish", () => {
+    const row = (pod: string, over: object = {}) => ({
+      namespace: "dra-test",
+      pod,
+      node: "n1",
+      gpus: ["12"],
+      gpuCount: 1,
+      gpuUtilPct: 0,
+      vramUsedMiB: 2000,
+      vramFreeMiB: 0,
+      powerWatts: 0,
+      ...over,
+    });
+    const store = new GpuStore();
+
+    runInAction(() => {
+      store.snapshot = {
+        ...snapshot,
+        rows: [row("idle"), row("unmeasured", { gpus: ["13"], utilUnpublished: true })],
+      } as unknown as Snapshot;
+    });
+
+    expect(store.idleRows.map((r) => r.pod)).toEqual(["idle"]);
+    // It is still a pod row, with its VRAM: only the idle verdict is withheld.
+    expect(store.rows.map((r) => r.pod).sort()).toEqual(["idle", "unmeasured"]);
+  });
 });

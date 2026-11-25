@@ -115,19 +115,19 @@ const INFERENCE_COLUMNS: Column<InferenceRow>[] = [
     width: 190,
     flex: 120,
     min: 80,
-    value: (r) => r.gpu?.gpuUtilPct ?? -1,
+    value: (r) => (r.gpu && !r.gpu.utilUnpublished ? r.gpu.gpuUtilPct : -1),
     render: (r) =>
       r.gpu ? (
         <>
           <span className="gpuext-badge gpuext-mono">{r.gpu.gpus.join(",")}</span>
-          <UtilBar pct={r.gpu.gpuUtilPct} />
+          {r.gpu.utilUnpublished ? "N/A" : <UtilBar pct={r.gpu.gpuUtilPct} />}
         </>
       ) : (
         <span className="gpuext-dim">not attributed</span>
       ),
     title_: (r) =>
       r.gpu
-        ? `GPU ${r.gpu.gpus.join(", ")}: ${r.gpu.gpuUtilPct.toFixed(1)}%, ${fmtMiB(r.gpu.vramUsedMiB)} VRAM${
+        ? `GPU ${r.gpu.gpus.join(", ")}: ${r.gpu.utilUnpublished ? "utilisation not published" : `${r.gpu.gpuUtilPct.toFixed(1)}%`}, ${fmtMiB(r.gpu.vramUsedMiB)} VRAM${
             r.sample?.gpuMemoryUtilization
               ? ` (vLLM reserves ${(r.sample.gpuMemoryUtilization * 100).toFixed(0)}% by design)`
               : ""

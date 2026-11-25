@@ -41,6 +41,15 @@ export interface PodGPU {
   vramUsedMiB: number;
   vramFreeMiB: number;
   powerWatts: number;
+  /**
+   * AMD: none of the devices of this row has a utilisation reading, so gpuUtilPct (0) is not a measurement. The
+   * exporter publishes utilisation and power for partition 0 of a split card only, so a pod on any other partition
+   * has none. Such a row is not idle, only unmeasured.
+   */
+  utilUnpublished?: boolean;
+  powerUnpublished?: boolean;
+  /** AMD: the utilisation and power are the whole card's reading (partition 0 of a split card), so they include the load of its other partitions. */
+  cardReading?: boolean;
 }
 
 export type Mode = "pod" | "gpu";

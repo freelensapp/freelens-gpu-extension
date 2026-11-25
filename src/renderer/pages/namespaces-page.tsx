@@ -59,9 +59,21 @@ const NS_COLUMNS: Column<NamespaceRow>[] = [
     title: "Avg GPU %",
     width: 175,
     min: 90,
-    value: (r) => r.avgUtilPct,
-    title_: (r) => `${r.avgUtilPct.toFixed(1)}% mean over the namespace's attributed pods`,
-    render: (r) => (r.devicesInUse > 0 ? <UtilBar pct={r.avgUtilPct} /> : <span className="gpuext-dim">–</span>),
+    value: (r) => (r.utilUnpublished ? -1 : r.avgUtilPct),
+    title_: (r) =>
+      r.utilUnpublished
+        ? "The exporter publishes no utilisation for the devices of this namespace's pods (on a split AMD card it does for partition 0 only)"
+        : `${r.avgUtilPct.toFixed(1)}% mean over the namespace's attributed pods`,
+    render: (r) =>
+      r.devicesInUse > 0 ? (
+        r.utilUnpublished ? (
+          "N/A"
+        ) : (
+          <UtilBar pct={r.avgUtilPct} />
+        )
+      ) : (
+        <span className="gpuext-dim">–</span>
+      ),
   },
   {
     key: "vram",

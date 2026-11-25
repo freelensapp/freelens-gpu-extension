@@ -602,6 +602,11 @@ export function aggregateAmd(fams: Families, exporterNode: string): AmdView {
     total: number;
     free: number;
     power: number;
+    /** The exporter published utilisation / power for this device (on a split card, for partition 0 only). */
+    utilPublished: boolean;
+    powerPublished: boolean;
+    /** The reading is the whole card's: it comes from a split card, where it includes the other partitions' load. */
+    card: boolean;
   }
   const perPod = new Map<string, { node: string; gpus: Map<string, GpuUse> }>();
   const devices = new Map<string, DevAcc>();
@@ -615,7 +620,7 @@ export function aggregateAmd(fams: Families, exporterNode: string): AmdView {
     } else if (!p.node) p.node = node;
     let g = p.gpus.get(gpu);
     if (!g) {
-      g = { util: 0, used: 0, total: 0, free: 0, power: 0 };
+      g = { util: 0, used: 0, total: 0, free: 0, power: 0, utilPublished: false, powerPublished: false, card: false };
       p.gpus.set(gpu, g);
     }
     return g;
@@ -635,7 +640,7 @@ export function aggregateAmd(fams: Families, exporterNode: string): AmdView {
 
   const take = (
     name: string,
-    applyUse: (g: GpuUse, v: number) => void,
+    applyUse: (g: GpuUse, v: number, labels: Record<string, string>) => void,
     applyDev: (d: GpuDevice, v: number) => void,
     value: (labels: Record<string, string>, v: number) => number = (_, v) => v,
   ) => {
@@ -644,7 +649,7 @@ export function aggregateAmd(fams: Families, exporterNode: string): AmdView {
       const node = exporterNode || m.labels.hostname || "";
       const held = amdWorkload(m.labels);
       const v = value(m.labels, m.value);
-      if (held) applyUse(use(held.ns, held.pod, node, gpu), v);
+      if (held) applyUse(use(held.ns, held.pod, node, gpu), v, m.labels);
       const a = dev(node, gpu, m.labels);
       if (held) a.pods.add(`${held.ns}/${held.pod}`);
       applyDev(a.dev, v);
@@ -654,7 +659,11 @@ export function aggregateAmd(fams: Families, exporterNode: string): AmdView {
 
   take(
     "amd_gpu_gfx_activity",
-    (g, v) => (g.util = Math.max(g.util, v)),
+    (g, v, labels) => {
+      g.util = Math.max(g.util, v);
+      g.utilPublished = true;
+      if (isPartitioned(labels)) g.card = true;
+    },
     (d, v) => {
       d.utilPct = Math.max(d.utilPct, v);
       d.utilPublished = true;
@@ -680,7 +689,11 @@ export function aggregateAmd(fams: Families, exporterNode: string): AmdView {
   for (const name of ["amd_gpu_average_package_power", "amd_gpu_package_power"]) {
     take(
       name,
-      (g, v) => (g.power = Math.max(g.power, v)),
+      (g, v, labels) => {
+        g.power = Math.max(g.power, v);
+        g.powerPublished = true;
+        if (isPartitioned(labels)) g.card = true;
+      },
       (d, v) => {
         d.powerWatts = Math.max(d.powerWatts, v);
         d.powerPublished = true;
@@ -701,11 +714,19 @@ export function aggregateAmd(fams: Families, exporterNode: string): AmdView {
     let free = 0;
     let power = 0;
     let util = 0;
+    let utilN = 0;
+    let powerN = 0;
     for (const [, g] of gpus) {
       used += g.used;
       free += g.total > 0 ? Math.max(0, g.total - g.used) : g.free;
       power += g.power;
-      util += g.util;
+      // A device the exporter publishes no utilisation for is not a 0 % reading: left out of the mean, which is then
+      // unmeasured (not idle) when no device of the pod has one.
+      if (g.utilPublished) {
+        util += g.util;
+        utilN++;
+      }
+      if (g.powerPublished) powerN++;
     }
     rows.push({
       source: "amd",
@@ -714,10 +735,13 @@ export function aggregateAmd(fams: Families, exporterNode: string): AmdView {
       node: p.node,
       gpus: gpus.map(([id]) => id),
       gpuCount: gpus.length,
-      gpuUtilPct: gpus.length > 0 ? util / gpus.length : 0,
+      gpuUtilPct: utilN > 0 ? util / utilN : 0,
       vramUsedMiB: used,
       vramFreeMiB: free,
       powerWatts: power,
+      ...(gpus.length > 0 && utilN === 0 ? { utilUnpublished: true } : {}),
+      ...(gpus.length > 0 && powerN === 0 ? { powerUnpublished: true } : {}),
+      ...(gpus.some(([, g]) => g.card) ? { cardReading: true } : {}),
     });
   }
   const devs: GpuDevice[] = [];
@@ -910,6 +934,12 @@ export function usesGpuResource(resources: Record<string, string> | undefined): 
  * slice repeats its card's DCGM_FI_DEV_POWER_USAGE, so a plain sum
  * multiplies a 7-slice A100's draw by 7.
  */
+export function isIdleDevice(d: GpuDevice, idlePct: number): boolean {
+  // An AMD partition the exporter publishes no utilisation for reads N/A, not 0 %: it is not idle.
+  if (d.partitioned && !d.utilPublished) return false;
+  return d.pods.length === 0 && d.utilPct < idlePct;
+}
+
 export function totalPowerW(devs: GpuDevice[]): number {
   const byCard = new Map<string, number>();
   for (const d of devs) {

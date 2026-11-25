@@ -113,6 +113,9 @@ const IDLE_COLUMNS: Column<IdleRow>[] = [
 export const WastePage = observer(({ extension }: { extension: Renderer.LensExtension }) => {
   const rows = gpuStore.idleRows;
   const held = rows.reduce((s, r) => s + r.vramUsedMiB, 0);
+  const unmeasured = gpuStore.rows.filter(
+    (r) => r.utilUnpublished && !r.gpuIndex && r.vramUsedMiB >= IDLE_MIN_VRAM_MIB,
+  ).length;
   return (
     <PageShell
       extension={extension}
@@ -125,6 +128,13 @@ export const WastePage = observer(({ extension }: { extension: Renderer.LensExte
             <>
               {" "}
               Currently {rows.length} pod{rows.length === 1 ? "" : "s"} holding {fmtMiB(held)}.
+            </>
+          )}
+          {unmeasured > 0 && (
+            <>
+              {" "}
+              {unmeasured} pod{unmeasured === 1 ? "" : "s"} on AMD partitions {unmeasured === 1 ? "is" : "are"} left
+              out: the exporter publishes no utilisation for them, so they cannot be called idle.
             </>
           )}
         </>

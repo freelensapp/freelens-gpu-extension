@@ -4,8 +4,8 @@ import { nodeLink, podRefLink } from "../components/links";
 import { PageShell } from "../components/page-shell";
 import { fmtMiB } from "../components/styles";
 import { UtilBar } from "../components/util-bar";
-import { deviceHealth, totalPowerW } from "../gpu/aggregate";
-import { gpuStore } from "../gpu/store";
+import { deviceHealth, isIdleDevice, totalPowerW } from "../gpu/aggregate";
+import { gpuStore, IDLE_UTIL_PCT } from "../gpu/store";
 
 import type { Renderer } from "@freelensapp/extensions";
 
@@ -191,7 +191,7 @@ export const DEVICE_COLUMNS: Column<GpuDevice>[] = [
 
 export const DevicesPage = observer(({ extension }: { extension: Renderer.LensExtension }) => {
   const devs = gpuStore.devices;
-  const idle = devs.filter((d) => d.pods.length === 0 && d.utilPct < 5).length;
+  const idle = devs.filter((d) => isIdleDevice(d, IDLE_UTIL_PCT)).length;
   // Only dcgm-exporter can report profiling counters; say so when it runs without them.
   const hasDcgm = gpuStore.snapshot?.exporters.some((e) => e.kind === "dcgm") ?? false;
   const sick = devs.filter((d) => ["bad", "warn"].includes(deviceHealth(d).level)).length;

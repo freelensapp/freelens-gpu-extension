@@ -11,6 +11,7 @@ import {
   deviceHealth,
   extractDcgmSamples,
   gpuResourceCount,
+  isIdleDevice,
   nodeHealth,
   podsPerDevice,
   rowHealth,
@@ -285,6 +286,62 @@ describe("AMD exporter on a card in CPX (MI300X: GPU 7 split into 8 partitions, 
     const total = view.devices.reduce((sum, d) => sum + d.vramTotalMiB, 0);
     expect(Math.round(total / 1024)).toBe(7 * 192 + 8 * 24); // 7 SPX cards plus the CPX card: 1536 GiB
   });
+
+  it("does not call a pod on partitions without a utilisation reading idle: it is unmeasured", () => {
+    // load-2part holds partitions 12 and 13, and the exporter publishes utilisation and power for partition 0 only.
+    const [row] = view.rows;
+    expect(row).toMatchObject({ pod: "load-2part", gpuUtilPct: 0, powerWatts: 0, utilUnpublished: true });
+    expect(row.powerUnpublished).toBe(true);
+    expect(row.cardReading).toBeUndefined();
+  });
+});
+
+describe("AMD pod rows on a split card", () => {
+  // Partition 0 carries the card's reading, labelled with the pod that holds it; partition 1 has none.
+  const labels = (gpu: string, part: string, pod: string) =>
+    `gpu_id="${gpu}",gpu_partition_id="${part}",gpu_compute_partition_type="cpx",serial_number="S",hostname="n1",gpu_uuid="u${gpu}",namespace="ml",pod="${pod}"`;
+  const text = [
+    `amd_gpu_gfx_activity{${labels("0", "0", "whole")}} 40`,
+    `amd_gpu_package_power{${labels("0", "0", "whole")}} 300`,
+    `amd_gpu_used_vram{${labels("0", "0", "whole")}} 100`,
+    `amd_gpu_used_vram{${labels("1", "1", "part")}} 500`,
+  ].join("\n");
+  const view = aggregateAmd(parsePrometheusText(text), "n1");
+
+  it("marks a pod on partition 0 as showing the whole card's reading, siblings' load included", () => {
+    const row = byPod(view.rows, "ml", "whole");
+    expect(row).toMatchObject({ gpuUtilPct: 40, powerWatts: 300, cardReading: true });
+    expect(row.utilUnpublished).toBeUndefined();
+    expect(row.powerUnpublished).toBeUndefined();
+  });
+
+  it("marks a pod on another partition as unmeasured, with its VRAM kept", () => {
+    expect(byPod(view.rows, "ml", "part")).toMatchObject({
+      gpuUtilPct: 0,
+      vramUsedMiB: 500,
+      utilUnpublished: true,
+      powerUnpublished: true,
+    });
+  });
+
+  it("averages only over the devices that publish utilisation when a pod holds both kinds", () => {
+    const both = [
+      `amd_gpu_gfx_activity{${labels("0", "0", "mix")}} 40`,
+      `amd_gpu_package_power{${labels("0", "0", "mix")}} 300`,
+      `amd_gpu_used_vram{${labels("1", "1", "mix")}} 500`,
+    ].join("\n");
+    const row = byPod(aggregateAmd(parsePrometheusText(both), "n1").rows, "ml", "mix");
+    expect(row.gpus).toEqual(["0", "1"]);
+    expect(row.gpuUtilPct).toBe(40); // not 20: partition 1 has no reading, so it does not pull the mean down
+    expect(row.utilUnpublished).toBeUndefined();
+  });
+
+  it("keeps a whole GPU's reading unflagged", () => {
+    const row = aggregateAmd(fams("amd_device_metrics.prom"), "n1").rows[0];
+    expect(row.utilUnpublished).toBeUndefined();
+    expect(row.powerUnpublished).toBeUndefined();
+    expect(row.cardReading).toBeUndefined();
+  });
 });
 
 describe("AMD partitions are sized per card", () => {
@@ -309,6 +366,36 @@ describe("AMD partitions are sized per card", () => {
     expect(total("1")).toBe(32768);
     expect(total("3")).toBe(24574);
     expect(total("6")).toBe(24574);
+  });
+});
+
+describe("isIdleDevice, the GPUs page count", () => {
+  const dev = (gpu: string, over: Partial<GpuDevice> = {}): GpuDevice => ({
+    node: "n",
+    gpu,
+    utilPct: 0,
+    vramUsedMiB: 0,
+    vramTotalMiB: 0,
+    powerWatts: 0,
+    pods: [],
+    ...over,
+  });
+
+  it("counts a whole GPU with no pod and under the threshold as idle", () => {
+    expect(isIdleDevice(dev("0"), 5)).toBe(true);
+  });
+
+  it("does not count a busy device or one with a pod", () => {
+    expect(isIdleDevice(dev("7", { utilPct: 25 }), 5)).toBe(false);
+    expect(isIdleDevice(dev("12", { pods: ["dra-test/load-2part"] }), 5)).toBe(false);
+  });
+
+  it("does not count an AMD partition whose utilisation is not published, it reads N/A", () => {
+    expect(isIdleDevice(dev("8", { partitioned: true, utilPublished: false }), 5)).toBe(false);
+  });
+
+  it("counts a partition that does publish a low utilisation", () => {
+    expect(isIdleDevice(dev("0", { partitioned: true, utilPublished: true }), 5)).toBe(true);
   });
 });
 

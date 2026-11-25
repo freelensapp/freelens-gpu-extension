@@ -13,6 +13,10 @@
   way NVIDIA DRA does; whole GPUs (`amdgpu`) and compute partitions (`amdgpu-partition`, with `partitionProfile` /
   `deviceID` / `parentDeviceID`) are parsed. Discovery also matches exporter pods whose name, image or labels mention
   `amd` as a word of its own (`amd.com`, `amd-device-metrics-exporter`, but not `amd64`) or `rocm`.
+- AMD GPUs split into compute partitions: the exporter publishes utilisation and power for partition 0 of a card only.
+  A pod on any other partition is no longer shown as 0 % and listed on Idle & waste: its utilisation and power read
+  "N/A" (it is unmeasured, not idle), and it is left out of the namespace averages. A pod on partition 0 shows the
+  reading of the whole card, siblings' load included, and is marked "whole card".
 
 ## 1.0.0
 

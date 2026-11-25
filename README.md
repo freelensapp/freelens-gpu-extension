@@ -120,8 +120,9 @@ You can also build and pack the extension yourself, see
 ## Features
 
 - **Autodiscovery**: lists pods, keeps Running ones whose name, image or
-  labels mention `dcgm`, `gpu`, `nvidia`, `cuda`, `rocm` or `amd` (as a word, not `amd64`), probes each
-  `/metrics` and classifies by content: NVIDIA **dcgm-exporter**
+  labels mention `dcgm`, `gpu`, `nvidia`, `cuda`, `rocm` or `amd` (as a word,
+  not `amd64`), probes each `/metrics` and classifies by content: NVIDIA
+  **dcgm-exporter**
   (`DCGM_FI_DEV_*`) or a **per-process exporter** (`gpu_process_memory_bytes`).
   Nothing to configure, nothing to deploy. If discovery misses yours, **pin**
   it per cluster on the Exporters page (`namespace/pod-prefix:port`).
