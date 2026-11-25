@@ -117,6 +117,8 @@ describe("GpuScraper pod state", () => {
     expect(snap.rows).toEqual([]);
     expect(snap.exporters).toEqual([]);
     expect(s.metricsNote).toMatch(/DRA published 1 GPU device/);
+    // The note keeps the pin hint, so the user knows how to point at an exporter the discovery missed.
+    expect(s.metricsNote).toMatch(/Pin a target on the Exporters page/);
     expect(s.podState?.draDevicesByNode?.n1).toMatchObject({ count: 1 });
     expect(s.podState?.requestedByNamespace["dra-test"]).toMatchObject({
       gpus: 1,

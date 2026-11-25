@@ -545,6 +545,8 @@ export class GpuScraper {
           lines[0],
           `DRA published ${draDevices} GPU device${draDevices === 1 ? "" : "s"}. Allocation and namespace counts come from ResourceSlices and ResourceClaims.`,
           "Utilisation, VRAM and power stay empty until an exporter emits DCGM_FI_DEV_*, gpu_process_memory_bytes or amd_gpu_*.",
+          // The pin hint and the probes say what was tried and how to point at the exporter.
+          ...lines.slice(2),
         ].join(" ");
         return { scrapedAt: new Date(), mode: "pod", rows: [], gpus: [], exporters: [] };
       }

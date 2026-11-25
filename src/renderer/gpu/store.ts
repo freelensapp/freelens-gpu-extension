@@ -431,7 +431,9 @@ export class GpuStore {
     this.setLoading(true);
     try {
       const [snap] = await Promise.all([this.scraper.snapshot(force), this.loadNodes(force)]);
-      this.recordHistory(snap);
+      // A snapshot with no exporter (none answered, or DRA only) has no measurements. Recording it would drop every
+      // pod's history, so the samples from before the outage wait for the next exporter that answers.
+      if (snap.exporters.length > 0) this.recordHistory(snap);
       runInAction(() => {
         this.snapshot = snap;
         this.error = undefined;
