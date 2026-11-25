@@ -61,8 +61,9 @@ are blacked out.
   cluster: `list pods` cluster-wide and `list nodes` (discovery and the
   Allocation view), `get pods/proxy` in the exporter's namespace (the
   scrape), plus `list services` and `get services/proxy` for the Prometheus
-  fallback and for the history on Idle & waste, and `list resourceslices` and `list resourceclaims`
-  (`resource.k8s.io`) on clusters with Dynamic Resource Allocation. Without
+  fallback and for the history on Idle & waste, and `list resourceslices`
+  and `list resourceclaims` (`resource.k8s.io`) on clusters with Dynamic
+  Resource Allocation. Without
   that permission, or on a cluster without DRA, the rest works as before.
 - **Node.js** is required only when building the extension from source; it
   is not needed to run it. The package is a self-contained bundle.
@@ -138,7 +139,8 @@ You can also build and pack the extension yourself, see
   pod-proxy subresource over the Freelens cluster connection. No DaemonSet,
   no Prometheus required, no port-forward, no RBAC beyond `list pods`,
   `list nodes`, `get pods/proxy` (plus `list services` and
-  `get services/proxy` for the Prometheus fallback and history, and `list` on DRA
+  `get services/proxy` for the Prometheus fallback and history, and `list` on
+  DRA
   `resourceslices` and `resourceclaims` where DRA is used).
 - **Dynamic Resource Allocation**: GPUs requested through a `ResourceClaim`
   instead of `nvidia.com/gpu` are recognised from the DRA objects, with the
