@@ -96,6 +96,7 @@ export interface ExporterScrape extends ExporterPod {
 
 export type { PendingGpuPod } from "./pending";
 
+import type { PodLookback } from "./lookback";
 import type { PendingGpuPod } from "./pending";
 
 /** GPU requests of pods holding devices: device count, per resource name, and the pods. */
@@ -138,12 +139,19 @@ export interface HistoryPoint {
 }
 
 export interface IdleRow extends PodGPU {
-  /** Minutes the pod has been observed idle (util below threshold) in this session. */
+  /**
+   * Minutes the pod has been idle (util below threshold): observed in this session, and reaching back before it
+   * when the lookback covers the pod.
+   */
   idleMinutes: number;
-  /** Number of samples backing idleMinutes. */
+  /** The pod was never seen busy, so idleMinutes is a lower bound. */
+  idleAtLeast: boolean;
+  /** Number of session samples backing idleMinutes. */
   samples: number;
-  /** Peak utilisation over the retained history window (up to 6 h), not just the idle stretch. */
+  /** Peak utilisation over the session history (up to 6 h) and the lookback window. */
   peakUtilPct: number;
+  /** What the query API of the cluster says about the pod over the lookback window, when it covers the pod. */
+  lookback?: PodLookback;
 }
 
 export interface AllocationRow {

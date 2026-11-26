@@ -3,7 +3,16 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { aggregateByPod, aggregateDevicesDcgm, extractDcgmSamples, totalPowerW } from "../aggregate";
 import { parsePrometheusText } from "../prom";
-import { promCandidates, promQueryPath, promResultToNodeFamilies, seriesCount } from "../prometheus";
+import {
+  clusterSettingTarget,
+  formatPromTarget,
+  normalizePrefix,
+  promApiPath,
+  promCandidates,
+  promQueryPath,
+  promResultToNodeFamilies,
+  seriesCount,
+} from "../prometheus";
 import { formatTarget, parseTarget } from "../targets";
 
 const dgx = parsePrometheusText(readFileSync(join(__dirname, "fixtures", "dgx_a100_mig_mixed.prom"), "utf8"));
@@ -173,5 +182,64 @@ describe("pinned targets", () => {
     expect(parseTarget("ns/pod")).toHaveProperty("error");
     expect(parseTarget("ns/pod:70000")).toEqual({ error: "port 70000 is out of range" });
     expect(parseTarget("NS/pod:1")).toEqual({ error: '"NS" is not a valid namespace name' });
+  });
+});
+
+describe("the Prometheus set in the cluster settings of Freelens", () => {
+  it("normalises the path prefix", () => {
+    expect(normalizePrefix(undefined)).toBe("");
+    expect(normalizePrefix("")).toBe("");
+    expect(normalizePrefix("/")).toBe("");
+    expect(normalizePrefix("prometheus")).toBe("/prometheus");
+    expect(normalizePrefix("/prometheus/")).toBe("/prometheus");
+    expect(normalizePrefix(" /a/b ")).toBe("/a/b");
+  });
+
+  it("becomes a target with its prefix and scheme", () => {
+    const t = clusterSettingTarget({
+      namespace: "mimir",
+      service: "mimir-query-frontend",
+      port: 8080,
+      prefix: "/prometheus",
+    });
+    expect(t).toEqual({
+      namespace: "mimir",
+      name: "mimir-query-frontend",
+      port: 8080,
+      prefix: "/prometheus",
+      https: false,
+      origin: "cluster-settings",
+    });
+    expect(promQueryPath(t!, "up")).toBe(
+      "/api/v1/namespaces/mimir/services/mimir-query-frontend:8080/proxy/prometheus/api/v1/query?query=up",
+    );
+    expect(formatPromTarget(t!)).toBe("mimir/svc/mimir-query-frontend:8080/prometheus");
+  });
+
+  it("proxies to an HTTPS service through the https: scheme of the service proxy", () => {
+    const t = clusterSettingTarget({ namespace: "mon", service: "prom", port: "9091", prefix: "", https: true });
+    expect(promApiPath(t!, "query_range", { query: "x", start: 1, end: 2, step: 60 })).toBe(
+      "/api/v1/namespaces/mon/services/https:prom:9091/proxy/api/v1/query_range?query=x&start=1&end=2&step=60",
+    );
+    expect(formatPromTarget(t!)).toBe("mon/svc/https:prom:9091");
+  });
+
+  it("is ignored when it is missing, incomplete or would not be a valid path", () => {
+    expect(clusterSettingTarget(undefined)).toBeUndefined();
+    expect(clusterSettingTarget({ namespace: "mon", service: "prom" })).toBeUndefined();
+    expect(clusterSettingTarget({ namespace: "mon", service: "prom", port: 0 })).toBeUndefined();
+    expect(clusterSettingTarget({ namespace: "mon", service: "prom", port: 70000 })).toBeUndefined();
+    expect(clusterSettingTarget({ namespace: "Mon", service: "prom", port: 9090 })).toBeUndefined();
+    expect(clusterSettingTarget({ namespace: "mon", service: "../x", port: 9090 })).toBeUndefined();
+    expect(clusterSettingTarget({ namespace: "mon", service: "prom", port: 9090, prefix: "/a?b" })).toBeUndefined();
+    // a prefix must not climb out of the service proxy
+    expect(clusterSettingTarget({ namespace: "mon", service: "prom", port: 9090, prefix: "/a/../b" })).toBeUndefined();
+    expect(
+      clusterSettingTarget({ namespace: "mon", service: "prom", port: 9090, prefix: "../../secrets" }),
+    ).toBeUndefined();
+    expect(clusterSettingTarget({ namespace: "mon", service: "prom", port: 9090, prefix: "/./x" })).toBeUndefined();
+    expect(
+      clusterSettingTarget({ namespace: "mon", service: "prom", port: 9090, prefix: "/.well-known/v1.2" }),
+    ).toEqual(expect.objectContaining({ prefix: "/.well-known/v1.2" }));
   });
 });

@@ -6,7 +6,7 @@ is the kube-apiserver itself, reached through Freelens' proxy, so the renderer c
 | Layer | Location | Role |
 | --- | --- | --- |
 | Entry | `src/renderer/index.tsx` | Registers the GPU sidebar group, five cluster pages, and Pod/Node detail items. |
-| Data | `src/renderer/gpu/` | `scraper.ts` (discovery + pod-proxy fetch), `prom.ts` (Prometheus text parser), `aggregate.ts` (attribution rules), `store.ts` (MobX store, polling, history, derived views), `types.ts`. |
+| Data | `src/renderer/gpu/` | `scraper.ts` (discovery + pod-proxy fetch), `prom.ts` (Prometheus text parser), `aggregate.ts` (attribution rules), `lookback.ts` (history from a query API: range queries, per-pod peaks and idle time), `store.ts` (MobX store, polling, history, derived views), `types.ts`. |
 | UI | `src/renderer/components/`, `src/renderer/pages/` | `DataGrid` (sortable/resizable CSS grid), `PageShell` (title, version, status, refresh, scrolling body), one page per view, drawer sections. |
 | Main | `src/main/index.ts` | Empty `Main.LensExtension`; present because Freelens loads both entry points. |
 
@@ -25,7 +25,9 @@ podsApi.list()  ──▶ candidates (Running, name/image/labels ∋ dcgm|gpu|nv
                         ├─ aggregateDevicesDcgm / aggregateDevicesEnricher     ──▶ GpuDevice[] (GPUs view)
                         └─ requestedByNode (pod nvidia.com/gpu limits)          ┐
                 nodesApi.list() capacity / allocatable                          ┴──▶ AllocationRow[] (Allocation view)
-                store.history (per pod, 6 h, in memory)                        ──▶ IdleRow[]      (Idle & waste view)
+                store.history (per pod, 6 h, in memory)                        ┐
+                query_range max_over_time(<metric>[step]) on a query API,       ┴──▶ IdleRow[]      (Idle & waste view)
+                  24 h or 7 d, read again when a step closes (lookback.ts)
                 scraper.lastProbes + per-exporter latency/bytes/error           ──▶ Exporters view
 ```
 

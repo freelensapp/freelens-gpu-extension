@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Idle & waste reads the history of the last 24 hours or 7 days from a Prometheus-compatible query API in the
+  cluster (Prometheus, Thanos, VictoriaMetrics, Mimir; the one the Prometheus fallback finds, or a pinned service),
+  also when the live numbers come from the exporter pods. "Idle for" reaches back to the pod's last busy moment
+  instead of to the moment Freelens opened, with `≥` for a pod that was never seen busy; **Idle share** is the part
+  of the window the pod spent under 5 % utilisation, and **Peak VRAM** is the most it held. One range query per
+  metric (`max_over_time` per step, so short bursts count), read again while the view is open only when a step of
+  the window has closed (every 5 minutes for 24 h, every 30 minutes for 7 d), through the service proxy: it needs `list services` and `get services/proxy`, and without them or without a query API the view
+  works as before. The snapshot (Copy JSON, Copy Markdown) carries the new numbers.
+- The Prometheus fallback and the history try the Prometheus set in the cluster settings of Freelens (Metrics:
+  service address, path prefix such as `/prometheus` for Mimir, HTTPS) before pinned and discovered query APIs, and
+  list no services when it has the GPU series.
 - AMD Device Metrics Exporter (`amd_gpu_gfx_activity`, `amd_gpu_used_vram`, `amd_gpu_average_package_power` and the
   uncorrectable ECC total) is a third metrics source, next to dcgm-exporter and the per-process exporter. Pod labels
   the exporter stamps from a device-plugin allocation or a DRA claim become the pod rows; the exporter pod itself is
