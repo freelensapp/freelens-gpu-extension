@@ -4,8 +4,8 @@ import { nodeLink, podRefLink } from "../components/links";
 import { PageShell } from "../components/page-shell";
 import { fmtMiB } from "../components/styles";
 import { UtilBar } from "../components/util-bar";
-import { deviceHealth, totalPowerW } from "../gpu/aggregate";
-import { gpuStore } from "../gpu/store";
+import { deviceHealth, isIdleDevice, totalPowerW } from "../gpu/aggregate";
+import { gpuStore, IDLE_UTIL_PCT } from "../gpu/store";
 
 import type { Renderer } from "@freelensapp/extensions";
 
@@ -84,11 +84,15 @@ export const DEVICE_COLUMNS: Column<GpuDevice>[] = [
     min: 50,
     num: true,
     value: (d) => d.powerWatts,
-    render: (d) => `${d.powerWatts.toFixed(0)} W`,
+    render: (d) => (d.partitioned && !d.powerPublished ? "N/A" : `${d.powerWatts.toFixed(0)} W`),
     title_: (d) =>
       d.migProfile
         ? `${d.powerWatts.toFixed(0)} W is the whole card's draw (DCGM reports it on every slice); pods and namespaces are charged a share by slice size`
-        : `${d.powerWatts.toFixed(0)} W`,
+        : d.partitioned && d.powerPublished
+          ? `${d.powerWatts.toFixed(0)} W is the whole card's draw (the exporter reports it on partition 0 only)`
+          : d.partitioned
+            ? "The exporter does not report power for this partition; the card's draw is on its partition 0"
+            : `${d.powerWatts.toFixed(0)} W`,
   },
   {
     key: "util",
@@ -96,8 +100,11 @@ export const DEVICE_COLUMNS: Column<GpuDevice>[] = [
     width: 175,
     min: 90,
     value: (d) => d.utilPct,
-    title_: (d) => `${d.utilPct.toFixed(1)}%`,
-    render: (d) => <UtilBar pct={d.utilPct} />,
+    title_: (d) =>
+      d.partitioned && !d.utilPublished
+        ? "The exporter does not report utilisation for this partition"
+        : `${d.utilPct.toFixed(1)}%`,
+    render: (d) => (d.partitioned && !d.utilPublished ? "N/A" : <UtilBar pct={d.utilPct} />),
   },
   ...(
     [
@@ -184,7 +191,7 @@ export const DEVICE_COLUMNS: Column<GpuDevice>[] = [
 
 export const DevicesPage = observer(({ extension }: { extension: Renderer.LensExtension }) => {
   const devs = gpuStore.devices;
-  const idle = devs.filter((d) => d.pods.length === 0 && d.utilPct < 5).length;
+  const idle = devs.filter((d) => isIdleDevice(d, IDLE_UTIL_PCT)).length;
   // Only dcgm-exporter can report profiling counters; say so when it runs without them.
   const hasDcgm = gpuStore.snapshot?.exporters.some((e) => e.kind === "dcgm") ?? false;
   const sick = devs.filter((d) => ["bad", "warn"].includes(deviceHealth(d).level)).length;

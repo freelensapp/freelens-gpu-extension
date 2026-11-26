@@ -15,6 +15,8 @@ type FakePod = {
   limits?: Record<string, string>;
   scheduled?: { status: string; reason?: string; message?: string };
   ports?: number[];
+  image?: string;
+  labels?: Record<string, string>;
 };
 
 const pod = (p: FakePod) => ({
@@ -25,12 +27,12 @@ const pod = (p: FakePod) => ({
   getContainers: () => [
     {
       name: "c",
-      image: "app:1",
+      image: p.image ?? "app:1",
       resources: { limits: p.limits ?? {} },
       ports: (p.ports ?? []).map((containerPort) => ({ containerPort })),
     },
   ],
-  metadata: { labels: {}, annotations: {}, creationTimestamp: "2026-09-24T10:00:00Z" },
+  metadata: { labels: p.labels ?? {}, annotations: {}, creationTimestamp: "2026-09-24T10:00:00Z" },
   status: { conditions: p.scheduled ? [{ type: "PodScheduled", ...p.scheduled }] : [] },
 });
 
@@ -76,6 +78,162 @@ describe("GpuScraper pod state", () => {
     expect(ps?.requestedByNode.n1).toMatchObject({ gpus: 2, byResource: { "nvidia.com/mig-1g.10gb": 2 } });
     expect(ps?.requestedByNamespace.ml.pods).toEqual(["ml/run", "ml/starting"]);
     expect(ps?.requestedByNamespace.web).toBeUndefined();
+  });
+
+  it("returns an empty snapshot instead of failing when DRA published devices and no exporter answered", async () => {
+    const slices = JSON.stringify({
+      items: [
+        {
+          spec: {
+            driver: "gpu.amd.com",
+            nodeName: "n1",
+            pool: { name: "n1" },
+            devices: [{ name: "gpu-1-128", attributes: { type: { string: "amdgpu" } } }],
+          },
+        },
+      ],
+    });
+    const claims = JSON.stringify({
+      items: [
+        {
+          metadata: { namespace: "dra-test", name: "hold" },
+          spec: { devices: { requests: [{ name: "gpu", exactly: { deviceClassName: "gpu.amd.com", count: 1 } }] } },
+          status: {
+            allocation: { devices: { results: [{ driver: "gpu.amd.com", pool: "n1", device: "gpu-1-128" }] } },
+            reservedFor: [{ resource: "pods", name: "holder" }],
+          },
+        },
+      ],
+    });
+    const pods = [
+      pod({ ns: "dra-test", name: "holder", phase: "Running", node: "n1" }),
+      // A candidate whose /metrics has no GPU series: it becomes a probe line in the note.
+      pod({ ns: "kube-amd-gpu", name: "amd-metrics-exporter-x", phase: "Running", node: "n1", ports: [5000] }),
+    ];
+    const s = new GpuScraper({
+      clusterId: () => "c1",
+      listPods: async () => pods as never,
+      listServices: async () => [],
+      fetchText: async () => "",
+      fetchDra: async (_id, path) => (path.endsWith("/resourceslices") ? slices : claims),
+    });
+    const snap = await s.snapshot();
+    expect(snap.rows).toEqual([]);
+    expect(snap.exporters).toEqual([]);
+    expect(s.metricsNote).toMatch(/DRA published 1 GPU device/);
+    // The note keeps the pin hint, so the user knows how to point at an exporter the discovery missed. It is a sentence
+    // of its own, after the last sentence of the paragraph, and the probes follow on lines of their own.
+    expect(s.metricsNote).toContain("amd_gpu_*. Pin a target on the Exporters page if discovery misses yours.\n  ");
+    expect(s.metricsNote).toMatch(/\n {2}\S.*amd-metrics-exporter-x/);
+    expect(s.metricsNote).not.toMatch(/amd_gpu_\*\.\s+query API/);
+    expect(s.podState?.draDevicesByNode?.n1).toMatchObject({ count: 1 });
+    expect(s.podState?.requestedByNamespace["dra-test"]).toMatchObject({
+      gpus: 1,
+      byResource: { "amdgpu (DRA)": 1 },
+    });
+  });
+});
+
+describe("GpuScraper AMD exporter", () => {
+  it("accepts the AMD device metrics exporter and attributes the labelled pod", async () => {
+    const body = readFileSync(join(__dirname, "fixtures", "amd_device_metrics.prom"), "utf8");
+    const exporter = pod({
+      ns: "kube-amd-gpu",
+      name: "amdgpu-metrics-exporter-x",
+      phase: "Running",
+      node: "n1",
+      ports: [5000],
+    });
+    const s = new GpuScraper({
+      clusterId: () => "c1",
+      listPods: async () => [exporter] as never,
+      listServices: async () => [],
+      fetchText: async () => body,
+    });
+    const snap = await s.snapshot();
+    expect(snap.exporters.map((e) => e.kind)).toEqual(["amd"]);
+    expect(snap.rows.map((r) => `${r.namespace}/${r.pod}`)).toEqual(["dra-test/amd-dra-holder"]);
+    expect(snap.gpus[0]).toMatchObject({ model: "AMD Radeon 8060S Graphics", utilPct: 2, powerWatts: 22 });
+    expect(s.metricsNote).toBe("");
+  });
+
+  it("names an MI300X by the DRA productName when the exporter only reports its part number", async () => {
+    const body = readFileSync(join(__dirname, "fixtures", "amd_device_metrics.prom"), "utf8").replaceAll(
+      'card_model="AMD Radeon 8060S Graphics"',
+      'card_model="102-G30211-0C"',
+    );
+    const slices = JSON.stringify({
+      items: [
+        {
+          spec: {
+            driver: "gpu.amd.com",
+            nodeName: "n1",
+            pool: { name: "n1" },
+            devices: [
+              {
+                name: "gpu-1-128",
+                attributes: { type: { string: "amdgpu" }, productName: { string: "AMD_Instinct_MI300X_OAM" } },
+              },
+            ],
+          },
+        },
+      ],
+    });
+    const exporter = pod({
+      ns: "kube-amd-gpu",
+      name: "amdgpu-metrics-exporter-x",
+      phase: "Running",
+      node: "n1",
+      ports: [5000],
+    });
+    const s = new GpuScraper({
+      clusterId: () => "c1",
+      listPods: async () => [exporter] as never,
+      listServices: async () => [],
+      fetchText: async () => body,
+      fetchDra: async (_id, path) => (path.endsWith("/resourceslices") ? slices : JSON.stringify({ items: [] })),
+    });
+    const snap = await s.snapshot();
+    expect(snap.gpus[0]).toMatchObject({ model: "AMD_Instinct_MI300X_OAM", utilPct: 2 });
+  });
+
+  it("keeps the exporter's model when the node's AMD DRA devices name two products", async () => {
+    const body = readFileSync(join(__dirname, "fixtures", "amd_device_metrics.prom"), "utf8").replaceAll(
+      'card_model="AMD Radeon 8060S Graphics"',
+      'card_model="102-G30211-0C"',
+    );
+    const device = (name: string, product: string) => ({
+      name,
+      attributes: { type: { string: "amdgpu" }, productName: { string: product } },
+    });
+    const slices = JSON.stringify({
+      items: [
+        {
+          spec: {
+            driver: "gpu.amd.com",
+            nodeName: "n1",
+            pool: { name: "n1" },
+            devices: [device("gpu-0", "AMD_Instinct_MI300X_OAM"), device("gpu-1", "AMD_Instinct_MI325X_OAM")],
+          },
+        },
+      ],
+    });
+    const exporter = pod({
+      ns: "kube-amd-gpu",
+      name: "amdgpu-metrics-exporter-x",
+      phase: "Running",
+      node: "n1",
+      ports: [5000],
+    });
+    const s = new GpuScraper({
+      clusterId: () => "c1",
+      listPods: async () => [exporter] as never,
+      listServices: async () => [],
+      fetchText: async () => body,
+      fetchDra: async (_id, path) => (path.endsWith("/resourceslices") ? slices : JSON.stringify({ items: [] })),
+    });
+    const snap = await s.snapshot();
+    expect(snap.gpus[0]).toMatchObject({ model: "102-G30211-0C" });
   });
 });
 
@@ -393,6 +551,59 @@ describe("GpuScraper discovery keywords", () => {
       `kube-system/dcgm-exporter-${node}:9400`,
     ]);
   });
+
+  it("does not take amd64 for the AMD keyword, but still finds an AMD exporter by name, image or label", async () => {
+    const pods = [
+      // The CPU architecture is not a GPU hint, in a name, an image or a label.
+      pod({ ns: "kube-system", name: "kube-proxy-amd64-x1", phase: "Running", node: "n1", ports: [10249] }),
+      pod({
+        ns: "web",
+        name: "api-0",
+        phase: "Running",
+        node: "n1",
+        ports: [8080],
+        image: "registry.example.com/api:1.2-linux-amd64",
+      }),
+      pod({
+        ns: "web",
+        name: "worker-0",
+        phase: "Running",
+        node: "n1",
+        ports: [8081],
+        labels: { "kubernetes.io/arch": "amd64" },
+      }),
+      // AMD exporters: "amd" as a word of the pod name, the ROCm image of the AMD GPU Operator, an amd.com label.
+      pod({ ns: "kube-amd-gpu", name: "amd-device-metrics-exporter-x1", phase: "Running", node: "n1", ports: [5000] }),
+      pod({
+        ns: "operator",
+        name: "config-metrics-exporter-x2",
+        phase: "Running",
+        node: "n1",
+        ports: [5001],
+        image: "docker.io/rocm/device-metrics-exporter:v1.5.3",
+      }),
+      pod({
+        ns: "monitoring",
+        name: "exporter-x3",
+        phase: "Running",
+        node: "n1",
+        ports: [5002],
+        labels: { "app.kubernetes.io/vendor": "amd" },
+      }),
+    ];
+    const s = new GpuScraper({
+      clusterId: () => "c1",
+      listPods: async () => pods as never,
+      listServices: async () => [],
+      fetchText: async () => "",
+    });
+    await expect(s.snapshot()).rejects.toThrow(/No GPU metrics exporter found/);
+    expect(s.lastProbes.map((p) => p.target).sort()).toEqual([
+      "kube-amd-gpu/amd-device-metrics-exporter-x1:5000",
+      "monitoring/exporter-x3:5002",
+      "operator/config-metrics-exporter-x2:5001",
+    ]);
+  });
 });
 
 describe("GpuScraper discovery cache without exporters", () => {
@@ -487,7 +698,9 @@ describe("GpuScraper with DRA", () => {
       paths.push(path);
       return raw(path.endsWith("resourceslices") ? "dra_resourceslices_v1.json" : "dra_resourceclaims_v1.json");
     });
-    await expect(s.snapshot()).rejects.toThrow(/No GPU metrics exporter found/);
+    const snap = await s.snapshot();
+    expect(snap.exporters).toEqual([]);
+    expect(s.metricsNote).toMatch(/DRA published 4 GPU devices/);
     expect(paths).toEqual(["/apis/resource.k8s.io/v1/resourceslices", "/apis/resource.k8s.io/v1/resourceclaims"]);
 
     const ps = s.podState;

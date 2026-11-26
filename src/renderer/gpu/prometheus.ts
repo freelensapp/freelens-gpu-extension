@@ -135,7 +135,8 @@ export function seriesCount(json: string): number {
 const SCRAPE_LABELS = ["instance", "job", "endpoint", "service", "prometheus", "prometheus_replica", "__replica__"];
 
 /** Pod names of the exporters themselves: a series "attributed" to one of them is really unattributed. */
-const EXPORTER_POD = /dcgm-exporter|dcgm_exporter|nvidia-dcgm|gpu-enricher|gpu-exporter/i;
+const EXPORTER_POD =
+  /dcgm-exporter|dcgm_exporter|nvidia-dcgm|gpu-enricher|gpu-exporter|device-metrics-exporter|amdgpu-metrics-exporter/i;
 
 /**
  * Labels of a series as the exporter emitted them, from what a query API returns.
@@ -172,7 +173,7 @@ export function repairLabels(metric: Record<string, string>): {
 
 export interface NodeFamilies {
   node: string;
-  kind: "dcgm" | "enricher";
+  kind: "dcgm" | "enricher" | "amd";
   fams: Families;
 }
 
@@ -195,7 +196,7 @@ export function promResultToNodeFamilies(json: string): NodeFamilies[] {
     seen.add(key);
     const value = Number(r.value?.[1]);
     if (!Number.isFinite(value)) continue;
-    const kind = name.startsWith("DCGM_") ? "dcgm" : "enricher";
+    const kind = name.startsWith("DCGM_") ? "dcgm" : name.startsWith("amd_gpu_") ? "amd" : "enricher";
     const gk = `${kind}/${node}`;
     let g = groups.get(gk);
     if (!g) {

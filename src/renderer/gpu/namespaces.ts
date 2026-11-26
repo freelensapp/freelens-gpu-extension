@@ -18,6 +18,8 @@ export interface NamespaceRow {
   devicesInUse: number;
   /** Mean GPU util over this namespace's attributed pods. */
   avgUtilPct: number;
+  /** None of the attributed pods has a utilisation reading (AMD partitions): avgUtilPct is not a measurement. */
+  utilUnpublished?: boolean;
   vramUsedMiB: number;
   /** Pods counted idle on the Idle & waste view, and the VRAM they hold. */
   idlePods: number;
@@ -74,8 +76,11 @@ export function aggregateNamespaces(
     else for (let i = 0; i < p.gpuCount; i++) r.devs.add(`${p.node}/?${p.pod}/${i}`);
     r.vramUsedMiB += p.vramUsedMiB;
     r.powerWatts += p.powerWatts;
-    r.utilSum += p.gpuUtilPct;
-    r.utilN++;
+    // A pod without a utilisation reading is left out of the mean: its 0 % is not a measurement.
+    if (!p.utilUnpublished) {
+      r.utilSum += p.gpuUtilPct;
+      r.utilN++;
+    }
     if ((p.sharedWith ?? 1) > 1 || p.timeSliced) r.shared = true;
   }
   for (const p of idle) {
@@ -89,6 +94,7 @@ export function aggregateNamespaces(
       ...r,
       devicesInUse: devs.size,
       avgUtilPct: utilN > 0 ? utilSum / utilN : 0,
+      ...(utilN === 0 && devs.size > 0 ? { utilUnpublished: true } : {}),
     }))
     .sort((a, b) => b.requested - a.requested || b.vramUsedMiB - a.vramUsedMiB || (a.namespace < b.namespace ? -1 : 1));
 }

@@ -62,6 +62,21 @@ export const ENRICHER_METRICS: readonly string[] = [
   "gpu_temperature_celsius",
 ];
 
+/**
+ * AMD Device Metrics Exporter (ROCm). gfx_activity is utilisation in percent, VRAM gauges are bytes/1024/1024
+ * (documented as MB), average_package_power is watts. The exporter stamps namespace and pod from the device
+ * plugin allocation or, failing that, from the DRA ResourceClaim.
+ */
+export const AMD_METRICS: readonly string[] = [
+  "amd_gpu_gfx_activity",
+  "amd_gpu_used_vram",
+  "amd_gpu_total_vram",
+  "amd_gpu_free_vram",
+  "amd_gpu_average_package_power",
+  "amd_gpu_package_power",
+  "amd_gpu_ecc_uncorrect_total",
+];
+
 /** DCGM: flatten wanted families into (ns, pod, gpu, node, metric, value). */
 export function extractDcgmSamples(fams: Families, exporterNode: string): FlatSample[] {
   const out: FlatSample[] = [];
@@ -524,9 +539,230 @@ export function aggregateDevicesEnricher(results: EnricherResult[]): GpuDevice[]
   return out;
 }
 
-/** nvidia.com/gpu, its renamed variants (nvidia.com/gpu.shared) and MIG resources (nvidia.com/mig-*). */
+/** The metrics exporter's own pod, when a series is labelled with it instead of the workload. */
+const AMD_EXPORTER_POD = /device-metrics-exporter|amdgpu-metrics-exporter/;
+
+function amdGpuId(labels: Record<string, string>): string {
+  return labels.gpu_id || labels.gpu_uuid || "?";
+}
+
+function amdWorkload(labels: Record<string, string>): { ns: string; pod: string } | undefined {
+  const ns = labels.namespace || "";
+  const pod = labels.pod || "";
+  if (!ns || !pod || AMD_EXPORTER_POD.test(pod)) return undefined;
+  return { ns, pod };
+}
+
+export interface AmdView {
+  rows: PodGPU[];
+  devices: GpuDevice[];
+}
+
+/** A card split by the driver (CPX, DPX, QPX): the exporter labels its partitions with a partition type other than spx. */
+const isPartitioned = (labels: Record<string, string>): boolean =>
+  !!labels.gpu_compute_partition_type && labels.gpu_compute_partition_type !== "spx";
+
+/**
+ * VRAM size of each partitioned card, keyed by serial. The partition 0 of a card reports the whole card's VRAM
+ * (196592 MiB on MI300X in CPX) while the others report their own share (24574 MiB). The partitions of one card are
+ * equal, so the size most of them report is the partition size.
+ */
+function partitionSizes(samples: Sample[]): Map<string, number> {
+  const counts = new Map<string, Map<number, number>>();
+  for (const s of samples) {
+    if (!isPartitioned(s.labels)) continue;
+    const card = s.labels.serial_number ?? "";
+    const c = counts.get(card) ?? new Map<number, number>();
+    c.set(s.value, (c.get(s.value) ?? 0) + 1);
+    counts.set(card, c);
+  }
+  const size = new Map<string, number>();
+  for (const [card, c] of counts) {
+    let best = 0;
+    let bestN = -1;
+    for (const [v, n] of c) {
+      if (n > bestN || (n === bestN && v < best)) {
+        best = v;
+        bestN = n;
+      }
+    }
+    size.set(card, best);
+  }
+  return size;
+}
+
+/**
+ * AMD Device Metrics Exporter: one pod row per workload the exporter attributed, and one device row per GPU.
+ * Gauges repeat once per label set; keep the max. VRAM numbers are already in MiB-sized MB.
+ */
+export function aggregateAmd(fams: Families, exporterNode: string): AmdView {
+  interface GpuUse {
+    util: number;
+    used: number;
+    total: number;
+    free: number;
+    power: number;
+    /** The exporter published utilisation / power for this device (on a split card, for partition 0 only). */
+    utilPublished: boolean;
+    powerPublished: boolean;
+    /** The reading is the whole card's: it comes from a split card, where it includes the other partitions' load. */
+    card: boolean;
+  }
+  const perPod = new Map<string, { node: string; gpus: Map<string, GpuUse> }>();
+  const devices = new Map<string, DevAcc>();
+
+  const use = (ns: string, pod: string, node: string, gpu: string): GpuUse => {
+    const key = `${ns}/${pod}`;
+    let p = perPod.get(key);
+    if (!p) {
+      p = { node, gpus: new Map() };
+      perPod.set(key, p);
+    } else if (!p.node) p.node = node;
+    let g = p.gpus.get(gpu);
+    if (!g) {
+      g = { util: 0, used: 0, total: 0, free: 0, power: 0, utilPublished: false, powerPublished: false, card: false };
+      p.gpus.set(gpu, g);
+    }
+    return g;
+  };
+  const dev = (node: string, gpu: string, labels: Record<string, string>): DevAcc => {
+    const k = devKey(node, gpu);
+    let a = devices.get(k);
+    if (!a) {
+      a = newDev(node, gpu);
+      devices.set(k, a);
+    }
+    if (labels.gpu_uuid && !a.dev.uuid) a.dev.uuid = labels.gpu_uuid;
+    if (labels.card_model && !a.dev.model) a.dev.model = labels.card_model;
+    if (isPartitioned(labels)) a.dev.partitioned = true;
+    return a;
+  };
+
+  const take = (
+    name: string,
+    applyUse: (g: GpuUse, v: number, labels: Record<string, string>) => void,
+    applyDev: (d: GpuDevice, v: number) => void,
+    value: (labels: Record<string, string>, v: number) => number = (_, v) => v,
+  ) => {
+    for (const m of fams.get(name) ?? []) {
+      const gpu = amdGpuId(m.labels);
+      const node = exporterNode || m.labels.hostname || "";
+      const held = amdWorkload(m.labels);
+      const v = value(m.labels, m.value);
+      if (held) applyUse(use(held.ns, held.pod, node, gpu), v, m.labels);
+      const a = dev(node, gpu, m.labels);
+      if (held) a.pods.add(`${held.ns}/${held.pod}`);
+      applyDev(a.dev, v);
+    }
+  };
+  const partitionSize = partitionSizes(fams.get("amd_gpu_total_vram") ?? []);
+
+  take(
+    "amd_gpu_gfx_activity",
+    (g, v, labels) => {
+      g.util = Math.max(g.util, v);
+      g.utilPublished = true;
+      if (isPartitioned(labels)) g.card = true;
+    },
+    (d, v) => {
+      d.utilPct = Math.max(d.utilPct, v);
+      d.utilPublished = true;
+    },
+  );
+  take(
+    "amd_gpu_used_vram",
+    (g, v) => (g.used = Math.max(g.used, v)),
+    (d, v) => (d.vramUsedMiB = Math.max(d.vramUsedMiB, v)),
+  );
+  take(
+    "amd_gpu_total_vram",
+    (g, v) => (g.total = Math.max(g.total, v)),
+    (d, v) => (d.vramTotalMiB = Math.max(d.vramTotalMiB, v)),
+    (labels, v) => (isPartitioned(labels) ? (partitionSize.get(labels.serial_number ?? "") ?? v) : v),
+  );
+  take(
+    "amd_gpu_free_vram",
+    (g, v) => (g.free = Math.max(g.free, v)),
+    () => undefined,
+  );
+  // The APU exports amd_gpu_average_package_power, MI300X amd_gpu_package_power. Both are per card, so the max is the card.
+  for (const name of ["amd_gpu_average_package_power", "amd_gpu_package_power"]) {
+    take(
+      name,
+      (g, v, labels) => {
+        g.power = Math.max(g.power, v);
+        g.powerPublished = true;
+        if (isPartitioned(labels)) g.card = true;
+      },
+      (d, v) => {
+        d.powerWatts = Math.max(d.powerWatts, v);
+        d.powerPublished = true;
+      },
+    );
+  }
+  take(
+    "amd_gpu_ecc_uncorrect_total",
+    () => undefined,
+    (d, v) => (d.eccDbe = Math.max(d.eccDbe ?? 0, v)),
+  );
+
+  const rows: PodGPU[] = [];
+  for (const [nsPod, p] of perPod) {
+    const i = nsPod.indexOf("/");
+    const gpus = [...p.gpus.entries()].sort(([a], [b]) => (a < b ? -1 : 1));
+    let used = 0;
+    let free = 0;
+    let power = 0;
+    let util = 0;
+    let utilN = 0;
+    let powerN = 0;
+    for (const [, g] of gpus) {
+      used += g.used;
+      free += g.total > 0 ? Math.max(0, g.total - g.used) : g.free;
+      power += g.power;
+      // A device the exporter publishes no utilisation for is not a 0 % reading: left out of the mean, which is then
+      // unmeasured (not idle) when no device of the pod has one.
+      if (g.utilPublished) {
+        util += g.util;
+        utilN++;
+      }
+      if (g.powerPublished) powerN++;
+    }
+    rows.push({
+      source: "amd",
+      namespace: nsPod.slice(0, i),
+      pod: nsPod.slice(i + 1),
+      node: p.node,
+      gpus: gpus.map(([id]) => id),
+      gpuCount: gpus.length,
+      gpuUtilPct: utilN > 0 ? util / utilN : 0,
+      vramUsedMiB: used,
+      vramFreeMiB: free,
+      powerWatts: power,
+      ...(gpus.length > 0 && utilN === 0 ? { utilUnpublished: true } : {}),
+      ...(gpus.length > 0 && powerN === 0 ? { powerUnpublished: true } : {}),
+      ...(gpus.some(([, g]) => g.card) ? { cardReading: true } : {}),
+    });
+  }
+  const devs: GpuDevice[] = [];
+  for (const a of devices.values()) {
+    if (a.dev.vramTotalMiB === 0) a.dev.vramTotalMiB = a.dev.vramUsedMiB;
+    a.dev.pods = [...a.pods].sort();
+    devs.push(a.dev);
+  }
+  return { rows, devices: devs };
+}
+
+/**
+ * GPU resource names from the device plugin: nvidia.com/gpu (and *.shared / MIG), and amd.com/gpu
+ * (AMD GPU Operator). DRA claims are handled separately in dra.ts.
+ */
 export const isGpuResourceName = (k: string): boolean =>
-  k === "nvidia.com/gpu" || k.startsWith("nvidia.com/gpu.") || k.startsWith("nvidia.com/mig-");
+  k === "nvidia.com/gpu" ||
+  k.startsWith("nvidia.com/gpu.") ||
+  k.startsWith("nvidia.com/mig-") ||
+  k === "amd.com/gpu" ||
+  k.startsWith("amd.com/gpu.");
 const isShared = (k: string) => k.endsWith(".shared");
 
 export type HealthLevel = "ok" | "warn" | "bad" | "unknown";
@@ -675,10 +911,10 @@ export function attributedPower(r: PodGPU, shares: Map<string, number>): number 
 /**
  * GPU devices in a resource list: `nvidia.com/gpu` plus every MIG resource
  * (`nvidia.com/mig-1g.10gb`, ...) that the device plugin advertises under
- * mig.strategy=mixed. Units are devices (whole GPUs or slices), matching
- * what the exporters report per row. `*.shared` resources (time-slicing
- * replicas, renameByDefault) are replicas of those same devices, not extra
- * hardware, so they are not counted.
+ * mig.strategy=mixed, and `amd.com/gpu` from the AMD GPU Operator. Units are
+ * devices (whole GPUs or slices), matching what the exporters report per row.
+ * `*.shared` resources (time-slicing replicas, renameByDefault) are replicas of
+ * those same devices, not extra hardware, so they are not counted.
  */
 export function gpuResourceCount(resources: Record<string, string> | undefined): number {
   let n = 0;
@@ -691,6 +927,13 @@ export function gpuResourceCount(resources: Record<string, string> | undefined):
 /** Whether a resource list asks for any GPU at all, including time-sliced `*.shared` replicas. */
 export function usesGpuResource(resources: Record<string, string> | undefined): boolean {
   return Object.entries(resources ?? {}).some(([k, v]) => isGpuResourceName(k) && (Number(v) || 0) > 0);
+}
+
+/** A device with no pod on it and utilisation under `idlePct`. A partition with no published reading is never idle. */
+export function isIdleDevice(d: GpuDevice, idlePct: number): boolean {
+  // An AMD partition the exporter publishes no utilisation for reads N/A, not 0 %: it is not idle.
+  if (d.partitioned && !d.utilPublished) return false;
+  return d.pods.length === 0 && d.utilPct < idlePct;
 }
 
 /**

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  aggregateAmd,
   aggregateByGPU,
   aggregateByPod,
   aggregateDevicesDcgm,
@@ -10,6 +11,7 @@ import {
   deviceHealth,
   extractDcgmSamples,
   gpuResourceCount,
+  isIdleDevice,
   nodeHealth,
   podsPerDevice,
   rowHealth,
@@ -44,6 +46,7 @@ describe("prom parser", () => {
     expect(classifyMetrics(fixture("dcgm_pod_labels.prom"))).toBe("dcgm");
     expect(classifyMetrics(fixture("dcgm_mig.prom"))).toBe("dcgm");
     expect(classifyMetrics(fixture("enricher.prom"))).toBe("enricher");
+    expect(classifyMetrics(fixture("amd_device_metrics.prom"))).toBe("amd");
     expect(classifyMetrics("http_requests_total 1")).toBeUndefined();
   });
 });
@@ -208,8 +211,203 @@ describe("power and resource totals", () => {
   it("treats time-sliced *.shared requests as using a GPU", () => {
     expect(usesGpuResource({ "nvidia.com/gpu.shared": "1" })).toBe(true);
     expect(usesGpuResource({ "nvidia.com/mig-1g.10gb": "1" })).toBe(true);
+    expect(usesGpuResource({ "amd.com/gpu": "2" })).toBe(true);
+    expect(gpuResourceCount({ "amd.com/gpu": "2", cpu: "8" })).toBe(2);
     expect(usesGpuResource({ "nvidia.com/gpu": "0", cpu: "4" })).toBe(false);
     expect(usesGpuResource(undefined)).toBe(false);
+  });
+});
+
+describe("AMD device metrics exporter", () => {
+  const view = aggregateAmd(fams("amd_device_metrics.prom"), "n1");
+  it("attributes the workload pod and keeps one device, ignoring the exporter pod and repeated gauges", () => {
+    expect(view.rows).toEqual([
+      expect.objectContaining({
+        source: "amd",
+        namespace: "dra-test",
+        pod: "amd-dra-holder",
+        node: "n1",
+        gpus: ["0"],
+        gpuCount: 1,
+        gpuUtilPct: 2,
+        vramUsedMiB: 2905,
+        vramFreeMiB: 32768 - 2905,
+        powerWatts: 22,
+      }),
+    ]);
+    expect(view.devices).toEqual([
+      expect.objectContaining({
+        node: "n1",
+        gpu: "0",
+        uuid: "00001586-0000-1000-8000-000000000000",
+        model: "AMD Radeon 8060S Graphics",
+        utilPct: 2,
+        vramUsedMiB: 2905,
+        vramTotalMiB: 32768,
+        powerWatts: 22,
+        eccDbe: 0,
+        pods: ["dra-test/amd-dra-holder"],
+      }),
+    ]);
+  });
+});
+
+describe("AMD exporter on a card in CPX (MI300X: GPU 7 split into 8 partitions, gpu_id 7 to 14)", () => {
+  const view = aggregateAmd(fams("amd_device_metrics_mi300x_cpx.prom"), "n1");
+  const dev = (gpu: string) => view.devices.find((d) => d.gpu === gpu) as GpuDevice;
+
+  it("lists a device per partition and puts the pod on the partitions it holds", () => {
+    expect(view.devices).toHaveLength(15);
+    expect(dev("12")).toMatchObject({ vramUsedMiB: 1016, vramTotalMiB: 24574, pods: ["dra-test/load-2part"] });
+    expect(dev("13").pods).toEqual(["dra-test/load-2part"]);
+    expect(dev("11").pods).toEqual([]);
+    expect(view.rows).toEqual([
+      expect.objectContaining({ pod: "load-2part", gpus: ["12", "13"], vramUsedMiB: 2032, gpuCount: 2 }),
+    ]);
+  });
+
+  it("marks the partitions, and only partition 0 carries the card's utilisation and power", () => {
+    expect(dev("7")).toMatchObject({ partitioned: true, utilPublished: true, powerPublished: true });
+    expect(dev("12")).toMatchObject({ partitioned: true });
+    expect(dev("12").utilPublished).toBeUndefined();
+    expect(dev("12").powerPublished).toBeUndefined();
+    expect(dev("0").partitioned).toBeUndefined();
+  });
+
+  it("has utilisation and power only on partition 0, because the exporter publishes them per card", () => {
+    expect(dev("7")).toMatchObject({ utilPct: 25, powerWatts: 471 });
+    expect(dev("12")).toMatchObject({ utilPct: 0, powerWatts: 0 });
+    expect(dev("0")).toMatchObject({ vramTotalMiB: 196592, powerWatts: 150 });
+  });
+
+  it("gives partition 0 its partition size, not the card's VRAM, so the node total is right", () => {
+    // The exporter reports 196592 MiB for gpu_id 7; its seven siblings report 24574 MiB each.
+    expect(dev("7").vramTotalMiB).toBe(24574);
+    const total = view.devices.reduce((sum, d) => sum + d.vramTotalMiB, 0);
+    expect(Math.round(total / 1024)).toBe(7 * 192 + 8 * 24); // 7 SPX cards plus the CPX card: 1536 GiB
+  });
+
+  it("does not call a pod on partitions without a utilisation reading idle: it is unmeasured", () => {
+    // load-2part holds partitions 12 and 13, and the exporter publishes utilisation and power for partition 0 only.
+    const [row] = view.rows;
+    expect(row).toMatchObject({ pod: "load-2part", gpuUtilPct: 0, powerWatts: 0, utilUnpublished: true });
+    expect(row.powerUnpublished).toBe(true);
+    expect(row.cardReading).toBeUndefined();
+  });
+});
+
+describe("AMD pod rows on a split card", () => {
+  // Partition 0 carries the card's reading, labelled with the pod that holds it; partition 1 has none.
+  const labels = (gpu: string, part: string, pod: string) =>
+    `gpu_id="${gpu}",gpu_partition_id="${part}",gpu_compute_partition_type="cpx",serial_number="S",hostname="n1",gpu_uuid="u${gpu}",namespace="ml",pod="${pod}"`;
+  const text = [
+    `amd_gpu_gfx_activity{${labels("0", "0", "whole")}} 40`,
+    `amd_gpu_package_power{${labels("0", "0", "whole")}} 300`,
+    `amd_gpu_used_vram{${labels("0", "0", "whole")}} 100`,
+    `amd_gpu_used_vram{${labels("1", "1", "part")}} 500`,
+  ].join("\n");
+  const view = aggregateAmd(parsePrometheusText(text), "n1");
+
+  it("marks a pod on partition 0 as showing the whole card's reading, siblings' load included", () => {
+    const row = byPod(view.rows, "ml", "whole");
+    expect(row).toMatchObject({ gpuUtilPct: 40, powerWatts: 300, cardReading: true });
+    expect(row.utilUnpublished).toBeUndefined();
+    expect(row.powerUnpublished).toBeUndefined();
+  });
+
+  it("marks a pod on another partition as unmeasured, with its VRAM kept", () => {
+    expect(byPod(view.rows, "ml", "part")).toMatchObject({
+      gpuUtilPct: 0,
+      vramUsedMiB: 500,
+      utilUnpublished: true,
+      powerUnpublished: true,
+    });
+  });
+
+  it("averages only over the devices that publish utilisation when a pod holds both kinds", () => {
+    const both = [
+      `amd_gpu_gfx_activity{${labels("0", "0", "mix")}} 40`,
+      `amd_gpu_package_power{${labels("0", "0", "mix")}} 300`,
+      `amd_gpu_used_vram{${labels("1", "1", "mix")}} 500`,
+    ].join("\n");
+    const row = byPod(aggregateAmd(parsePrometheusText(both), "n1").rows, "ml", "mix");
+    expect(row.gpus).toEqual(["0", "1"]);
+    expect(row.gpuUtilPct).toBe(40); // not 20: partition 1 has no reading, so it does not pull the mean down
+    expect(row.utilUnpublished).toBeUndefined();
+  });
+
+  it("keeps a whole GPU's reading unflagged", () => {
+    const row = aggregateAmd(fams("amd_device_metrics.prom"), "n1").rows[0];
+    expect(row.utilUnpublished).toBeUndefined();
+    expect(row.powerUnpublished).toBeUndefined();
+    expect(row.cardReading).toBeUndefined();
+  });
+});
+
+describe("AMD partitions are sized per card", () => {
+  // Two cards on one node in different splits: card A in three 32 GiB partitions, card B in four 24 GiB ones. Partition
+  // 0 of each reports the card's whole VRAM. Each card must keep its own partition size, not the node's.
+  const gauge = (gpu: string, part: string, serial: string, total: number) =>
+    `amd_gpu_total_vram{gpu_id="${gpu}",gpu_partition_id="${part}",gpu_compute_partition_type="dpx",serial_number="${serial}",hostname="n1",gpu_uuid="u${gpu}"} ${total}`;
+  const text = [
+    gauge("0", "0", "A", 196592),
+    gauge("1", "1", "A", 32768),
+    gauge("2", "2", "A", 32768),
+    gauge("3", "0", "B", 196592),
+    gauge("4", "1", "B", 24574),
+    gauge("5", "2", "B", 24574),
+    gauge("6", "3", "B", 24574),
+  ].join("\n");
+
+  it("uses the size most partitions of the same card report", () => {
+    const view = aggregateAmd(parsePrometheusText(text), "n1");
+    const total = (gpu: string) => view.devices.find((d) => d.gpu === gpu)?.vramTotalMiB;
+    expect(total("0")).toBe(32768);
+    expect(total("1")).toBe(32768);
+    expect(total("3")).toBe(24574);
+    expect(total("6")).toBe(24574);
+  });
+});
+
+describe("isIdleDevice, the GPUs page count", () => {
+  const dev = (gpu: string, over: Partial<GpuDevice> = {}): GpuDevice => ({
+    node: "n",
+    gpu,
+    utilPct: 0,
+    vramUsedMiB: 0,
+    vramTotalMiB: 0,
+    powerWatts: 0,
+    pods: [],
+    ...over,
+  });
+
+  it("counts a whole GPU with no pod and under the threshold as idle", () => {
+    expect(isIdleDevice(dev("0"), 5)).toBe(true);
+  });
+
+  it("does not count a busy device or one with a pod", () => {
+    expect(isIdleDevice(dev("7", { utilPct: 25 }), 5)).toBe(false);
+    expect(isIdleDevice(dev("12", { pods: ["dra-test/load-2part"] }), 5)).toBe(false);
+  });
+
+  it("does not count an AMD partition whose utilisation is not published, it reads N/A", () => {
+    expect(isIdleDevice(dev("8", { partitioned: true, utilPublished: false }), 5)).toBe(false);
+  });
+
+  it("counts a partition that does publish a low utilisation", () => {
+    expect(isIdleDevice(dev("0", { partitioned: true, utilPublished: true }), 5)).toBe(true);
+  });
+});
+
+describe("AMD package power under either exporter name", () => {
+  it("reads amd_gpu_package_power, as MI300X exports it", () => {
+    const text = fixture("amd_device_metrics.prom").replaceAll(
+      "amd_gpu_average_package_power",
+      "amd_gpu_package_power",
+    );
+    const view = aggregateAmd(parsePrometheusText(text), "n1");
+    expect(view.devices[0]).toMatchObject({ gpu: "0", powerWatts: 22 });
+    expect(view.rows[0]).toMatchObject({ powerWatts: 22 });
   });
 });
 

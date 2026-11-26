@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  draResourceName,
   explainPendingClaims,
   indexDra,
   isGpuDeviceClass,
@@ -154,10 +155,143 @@ describe("indexDra", () => {
   });
 });
 
+describe("AMD DRA (gpu.amd.com)", () => {
+  const amdSlices = fixture("dra_amd_resourceslices_v1.json");
+  const amdClaims = fixture("dra_amd_resourceclaims_v1.json");
+
+  it("reads AMD GPUs and partitions with deviceID, parentDeviceID and partitionProfile", () => {
+    const devs = parseResourceSlices(amdSlices);
+    expect(devs.map((d) => d.name)).toEqual(["gpu-56-184", "gpu-4-132", "gpu-48-176"]);
+    expect(devs[0]).toMatchObject({
+      node: "gpu-worker-2",
+      driver: "gpu.amd.com",
+      type: "amdgpu",
+      uuid: "8462659767828489944",
+      product: "AMD_Instinct_MI300X_OAM",
+      profile: "spx_nps1",
+      memoryMiB: 196592,
+    });
+    expect(devs[1]).toMatchObject({
+      type: "amdgpu-partition",
+      profile: "cpx_nps1",
+      parentUuid: "16912319329091163297",
+      memoryMiB: 24574,
+    });
+    expect(draResourceName(devs[0])).toBe("amdgpu (DRA)");
+    expect(draResourceName(devs[1])).toBe("amdgpu-partition-cpx_nps1 (DRA)");
+  });
+
+  it("indexes allocated AMD claims and finds pods on a card through partitions", () => {
+    const ix = indexDra({ devices: parseResourceSlices(amdSlices), claims: parseResourceClaims(amdClaims) });
+    expect(ix.podDevices.get("gpu-test/pod1")?.map((d) => d.name)).toEqual(["gpu-56-184"]);
+    expect(ix.podDevices.get("gpu-test/notebook")?.map((d) => d.name)).toEqual(["gpu-4-132"]);
+    expect(podsOnCard(ix, "8462659767828489944")).toEqual(["gpu-test/pod1"]);
+    expect(podsOnCard(ix, "16912319329091163297")).toEqual(["gpu-test/notebook"]);
+  });
+
+  describe("a node whose cards share one deviceID", () => {
+    // Captured from 8x MI300X (driver 1.0.1, MI300X in SPX/NPS1): every card publishes deviceID 0x74a1, the PCI id of
+    // the model. Two pods hold cards: one claim for one GPU, one claim for two.
+    const mi300x = parseResourceSlices(fixture("dra_amd_mi300x_8gpu_resourceslices_v1.json"));
+    const mi300xClaims = parseResourceClaims(fixture("dra_amd_mi300x_8gpu_resourceclaims_v1.json"));
+    const card = (name: string) => mi300x.find((d) => d.name === name)?.uuid ?? "";
+
+    it("tells the eight cards apart by their PCI address", () => {
+      expect(mi300x).toHaveLength(8);
+      expect(new Set(mi300x.map((d) => d.uuid)).size).toBe(8);
+      expect(mi300x.every((d) => /^[0-9a-f]{4}:[0-9a-f]{2}:00\.0$/.test(d.uuid ?? ""))).toBe(true);
+      expect(mi300x.every((d) => d.product === "AMD_Instinct_MI300X_OAM" && d.memoryMiB === 196592)).toBe(true);
+    });
+
+    it("lists each pod only on the cards its claim was allocated", () => {
+      const ix = indexDra({ devices: mi300x, claims: mi300xClaims });
+      expect(podsOnCard(ix, card("gpu-57-184"))).toEqual(["dra-test/holder-1gpu"]);
+      expect(podsOnCard(ix, card("gpu-1-128"))).toEqual(["dra-test/holder-2gpu"]);
+      expect(podsOnCard(ix, card("gpu-9-136"))).toEqual(["dra-test/holder-2gpu"]);
+      expect(podsOnCard(ix, card("gpu-17-144"))).toEqual([]);
+    });
+
+    it("tells the 8 partitions of a CPX card apart (live capture, GPU 7 in CPX, GPUs 0 to 6 in SPX)", () => {
+      const devs = parseResourceSlices(fixture("dra_amd_mi300x_cpx_resourceslices_v1.json"));
+      const parts = devs.filter((d) => d.type === "amdgpu-partition");
+      expect(devs).toHaveLength(15);
+      expect(parts).toHaveLength(8);
+      expect(parts.every((d) => d.profile === "cpx_nps1" && d.memoryMiB === 24574)).toBe(true);
+      expect(new Set(devs.map((d) => d.uuid)).size).toBe(15);
+      expect([...new Set(parts.map((d) => d.parentUuid))]).toEqual(["0000:da:00.0"]);
+      const claims = parseResourceClaims(fixture("dra_amd_mi300x_cpx_resourceclaims_v1.json"));
+      const ix = indexDra({ devices: devs, claims });
+      expect(
+        ix.podDevices
+          .get("dra-test/load-2part")
+          ?.map((d) => d.name)
+          .sort(),
+      ).toEqual(["gpu-62-189", "gpu-63-190"]);
+      expect(podsOnCard(ix, "0000:da:00.0")).toEqual(["dra-test/load-2part"]);
+      expect(podsOnCard(ix, "0000:c2:00.0")).toEqual([]);
+    });
+
+    it("gives a partition its own identity and links it to the card by PCI address", () => {
+      const slice = (devices: unknown[]) => ({
+        items: [{ spec: { driver: "gpu.amd.com", nodeName: "n1", pool: { name: "n1" }, devices } }],
+      });
+      const attrs = (type: string, pci: string) => ({
+        type: { string: type },
+        deviceID: { string: "0x74a1" },
+        "resource.kubernetes.io/pciBusID": { string: pci },
+        partitionProfile: { string: type === "amdgpu" ? "spx_nps1" : "cpx_nps1" },
+      });
+      const devs = parseResourceSlices(
+        slice([
+          { name: "gpu-1-128", attributes: attrs("amdgpu", "0000:11:00.0") },
+          { name: "gpu-1-128-p0", attributes: attrs("amdgpu-partition", "0000:11:00.0") },
+          { name: "gpu-1-128-p1", attributes: attrs("amdgpu-partition", "0000:11:00.0") },
+          { name: "gpu-9-136", attributes: attrs("amdgpu", "0000:2f:00.0") },
+        ]),
+      );
+      expect(devs.map((d) => d.uuid)).toEqual([
+        "0000:11:00.0",
+        "0000:11:00.0/gpu-1-128-p0",
+        "0000:11:00.0/gpu-1-128-p1",
+        "0000:2f:00.0",
+      ]);
+      expect(devs[1].parentUuid).toBe("0000:11:00.0");
+      const claims = parseResourceClaims({
+        items: [
+          {
+            metadata: { namespace: "ml", name: "c" },
+            spec: { devices: { requests: [{ name: "g", exactly: { deviceClassName: "gpu.amd.com", count: 1 } }] } },
+            status: {
+              allocation: { devices: { results: [{ driver: "gpu.amd.com", pool: "n1", device: "gpu-1-128-p1" }] } },
+              reservedFor: [{ resource: "pods", name: "trainer" }],
+            },
+          },
+        ],
+      });
+      const ix = indexDra({ devices: devs, claims });
+      expect(podsOnCard(ix, "0000:11:00.0")).toEqual(["ml/trainer"]);
+      expect(podsOnCard(ix, "0000:2f:00.0")).toEqual([]);
+    });
+  });
+
+  it("explains pending AMD claims against published amdgpu capacity", () => {
+    const ix = indexDra({ devices: parseResourceSlices(amdSlices), claims: parseResourceClaims(amdClaims) });
+    const pending = parseResourceClaims(amdClaims).filter((c) => c.name === "eight-amd-gpus");
+    expect(explainPendingClaims(pending, ix)).toEqual([
+      "Needs 8 amdgpu on one node (claim eight-amd-gpus); the most any node offers is 3.",
+    ]);
+    const one = { ...pending[0], requests: [{ name: "gpu", deviceClasses: ["gpu.amd.com"], count: 1 }] };
+    expect(explainPendingClaims([one], ix)).toEqual([]);
+  });
+});
+
 describe("helpers", () => {
   it("tells GPU device classes from the ComputeDomain ones", () => {
     expect(isGpuDeviceClass("gpu.nvidia.com")).toBe(true);
     expect(isGpuDeviceClass("mig.nvidia.com")).toBe(true);
+    expect(isGpuDeviceClass("gpu.amd.com")).toBe(true);
+    expect(isGpuDeviceClass("amd.com")).toBe(false);
+    expect(isGpuDeviceClass("mig.amd.com")).toBe(false);
     expect(isGpuDeviceClass("compute-domain-daemon.nvidia.com")).toBe(false);
     expect(isGpuDeviceClass("gpu.example.com")).toBe(false);
   });

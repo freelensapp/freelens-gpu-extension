@@ -91,23 +91,32 @@ export const POD_COLUMNS: Column<PodGPU>[] = [
     title: "GPU %",
     width: 230,
     min: 90,
-    value: (r) => r.gpuUtilPct,
+    value: (r) => (r.utilUnpublished ? -1 : r.gpuUtilPct),
     title_: (r) =>
-      (r.sharedWith ?? 1) > 1
-        ? `${r.gpuUtilPct.toFixed(1)}% for the whole device, shared by ${r.sharedWith} pods; dcgm-exporter cannot split it per pod`
-        : r.timeSliced
-          ? `${r.gpuUtilPct.toFixed(1)}% for the whole device: the node time-slices its GPUs, so other pods may share it`
-          : `${r.gpuUtilPct.toFixed(1)}%`,
-    render: (r) => (
-      <>
-        <UtilBar pct={r.gpuUtilPct} />
-        {(r.sharedWith ?? 1) > 1 ? (
-          <span className="gpuext-badge gpuext-shared">shared ×{r.sharedWith}</span>
-        ) : (
-          r.timeSliced && <span className="gpuext-badge gpuext-shared">time-sliced</span>
-        )}
-      </>
-    ),
+      r.utilUnpublished
+        ? "The exporter publishes no utilisation for this pod's partitions (on a split AMD card it does for partition 0 only)"
+        : (r.sharedWith ?? 1) > 1
+          ? `${r.gpuUtilPct.toFixed(1)}% for the whole device, shared by ${r.sharedWith} pods; dcgm-exporter cannot split it per pod`
+          : r.timeSliced
+            ? `${r.gpuUtilPct.toFixed(1)}% for the whole device: the node time-slices its GPUs, so other pods may share it`
+            : r.cardReading
+              ? `${r.gpuUtilPct.toFixed(1)}% for the whole card: the exporter reports it on partition 0 only, so it includes the load of the card's other partitions`
+              : `${r.gpuUtilPct.toFixed(1)}%`,
+    render: (r) =>
+      r.utilUnpublished ? (
+        "N/A"
+      ) : (
+        <>
+          <UtilBar pct={r.gpuUtilPct} />
+          {(r.sharedWith ?? 1) > 1 ? (
+            <span className="gpuext-badge gpuext-shared">shared ×{r.sharedWith}</span>
+          ) : r.timeSliced ? (
+            <span className="gpuext-badge gpuext-shared">time-sliced</span>
+          ) : (
+            r.cardReading && <span className="gpuext-badge gpuext-shared">whole card</span>
+          )}
+        </>
+      ),
   },
   {
     key: "power",
@@ -116,7 +125,13 @@ export const POD_COLUMNS: Column<PodGPU>[] = [
     min: 50,
     num: true,
     value: (r) => r.powerWatts,
-    render: (r) => `${r.powerWatts.toFixed(0)} W`,
+    title_: (r) =>
+      r.powerUnpublished
+        ? "The exporter publishes no power for this pod's partitions (on a split AMD card it does for partition 0 only)"
+        : r.cardReading
+          ? `${r.powerWatts.toFixed(0)} W is the whole card's draw, which the other partitions share`
+          : `${r.powerWatts.toFixed(0)} W`,
+    render: (r) => (r.powerUnpublished ? "N/A" : `${r.powerWatts.toFixed(0)} W`),
   },
   {
     key: "vramUsed",

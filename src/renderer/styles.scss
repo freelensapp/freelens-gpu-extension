@@ -50,6 +50,10 @@
   font-size: 12px;
   margin: var(--padding) 0;
 }
+/* A note whose lines (one per probe) must stay on their own lines, like the error box. */
+.gpuext-note {
+  white-space: pre-wrap;
+}
 .gpuext-grid {
   display: grid;
   width: max-content;

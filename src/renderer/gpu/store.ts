@@ -91,6 +91,8 @@ export class GpuStore {
   /** Pod-list state; updated even when the metrics snapshot fails (no exporter, scrape errors). */
   @observableRef accessor podState: PodState | undefined = undefined;
   @observable accessor error: string | undefined = undefined;
+  /** Why utilisation is empty when DRA (or the pod list) still has GPUs. Not a failed scrape. */
+  @observable accessor metricsNote: string | undefined = undefined;
   @observable accessor loading = false;
   @observableRef accessor nodes: NodeInfo[] = [];
   @observable accessor nodesError: string | undefined = undefined;
@@ -178,6 +180,7 @@ export class GpuStore {
     const out: IdleRow[] = [];
     for (const r of this.rows) {
       if (r.gpuIndex) continue; // fallback rows have no pod identity
+      if (r.utilUnpublished) continue; // unmeasured, not idle: the exporter has no utilisation for its devices
       if (r.gpuUtilPct >= IDLE_UTIL_PCT || r.vramUsedMiB < IDLE_MIN_VRAM_MIB) continue;
       const key = `${r.namespace}/${r.pod}`;
       const h = this.history.get(key) ?? [];
@@ -462,15 +465,19 @@ export class GpuStore {
     this.setLoading(true);
     try {
       const [snap] = await Promise.all([this.scraper.snapshot(force), this.loadNodes(force)]);
-      this.recordHistory(snap);
+      // A snapshot with no exporter (none answered, or DRA only) has no measurements. Recording it would drop every
+      // pod's history, so the samples from before the outage wait for the next exporter that answers.
+      if (snap.exporters.length > 0) this.recordHistory(snap);
       runInAction(() => {
         this.snapshot = snap;
         this.error = undefined;
+        this.metricsNote = this.scraper.metricsNote || undefined;
         this.historyVersion++;
       });
     } catch (e) {
       runInAction(() => {
         this.error = e instanceof Error ? e.message : String(e);
+        this.metricsNote = undefined;
       });
     } finally {
       // Inference servers don't depend on a GPU exporter: scrape them whether or not the snapshot worked.

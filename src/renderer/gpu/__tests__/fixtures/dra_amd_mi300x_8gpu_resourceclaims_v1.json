@@ -1,0 +1,104 @@
+{
+  "kind": "ResourceClaimList",
+  "apiVersion": "resource.k8s.io/v1",
+  "items": [
+    {
+      "metadata": {
+        "namespace": "dra-test",
+        "name": "holder-1gpu-gpu-t5vg9",
+        "ownerReferences": [
+          {
+            "kind": "Pod",
+            "name": "holder-1gpu"
+          }
+        ]
+      },
+      "spec": {
+        "devices": {
+          "requests": [
+            {
+              "exactly": {
+                "allocationMode": "ExactCount",
+                "count": 1,
+                "deviceClassName": "gpu.amd.com"
+              },
+              "name": "gpu"
+            }
+          ]
+        }
+      },
+      "status": {
+        "allocation": {
+          "devices": {
+            "results": [
+              {
+                "request": "gpu",
+                "driver": "gpu.amd.com",
+                "pool": "mi300x-node",
+                "device": "gpu-57-184"
+              }
+            ]
+          }
+        },
+        "reservedFor": [
+          {
+            "resource": "pods",
+            "name": "holder-1gpu"
+          }
+        ]
+      }
+    },
+    {
+      "metadata": {
+        "namespace": "dra-test",
+        "name": "holder-2gpu-gpu-5nrqh",
+        "ownerReferences": [
+          {
+            "kind": "Pod",
+            "name": "holder-2gpu"
+          }
+        ]
+      },
+      "spec": {
+        "devices": {
+          "requests": [
+            {
+              "exactly": {
+                "allocationMode": "ExactCount",
+                "count": 2,
+                "deviceClassName": "gpu.amd.com"
+              },
+              "name": "gpu"
+            }
+          ]
+        }
+      },
+      "status": {
+        "allocation": {
+          "devices": {
+            "results": [
+              {
+                "request": "gpu",
+                "driver": "gpu.amd.com",
+                "pool": "mi300x-node",
+                "device": "gpu-1-128"
+              },
+              {
+                "request": "gpu",
+                "driver": "gpu.amd.com",
+                "pool": "mi300x-node",
+                "device": "gpu-9-136"
+              }
+            ]
+          }
+        },
+        "reservedFor": [
+          {
+            "resource": "pods",
+            "name": "holder-2gpu"
+          }
+        ]
+      }
+    }
+  ]
+}

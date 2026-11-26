@@ -95,6 +95,27 @@ describe("aggregateNamespaces, shared devices", () => {
   });
 });
 
+describe("aggregateNamespaces, pods without a utilisation reading", () => {
+  const measured = row("ml", "a", { gpus: ["0"], gpuUtilPct: 50, vramUsedMiB: 1000 });
+  const unmeasured = row("ml", "b", { gpus: ["1"], gpuUtilPct: 0, vramUsedMiB: 2000, utilUnpublished: true });
+
+  it("leaves them out of the mean, keeps their VRAM and devices, and does not flag the namespace", () => {
+    const [ml] = aggregateNamespaces({}, [measured, unmeasured], [], []);
+    expect(ml).toMatchObject({ avgUtilPct: 50, vramUsedMiB: 3000, devicesInUse: 2 });
+    expect(ml.utilUnpublished).toBeUndefined();
+  });
+
+  it("flags a namespace whose pods have no reading at all, instead of showing 0 %", () => {
+    const [ml] = aggregateNamespaces({}, [unmeasured], [], []);
+    expect(ml).toMatchObject({ avgUtilPct: 0, devicesInUse: 1, utilUnpublished: true });
+  });
+
+  it("does not flag a namespace that only requests GPUs", () => {
+    const [ml] = aggregateNamespaces({ ml: { gpus: 1, byResource: {}, pods: ["a"] } }, [], [], []);
+    expect(ml.utilUnpublished).toBeUndefined();
+  });
+});
+
 describe("migFree", () => {
   it("klabdgx 2026-09-24: 28 x 1g.10gb and 1 x 3g.40gb requested", () => {
     expect(

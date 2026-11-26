@@ -13,6 +13,21 @@
 - The Prometheus fallback and the history try the Prometheus set in the cluster settings of Freelens (Metrics:
   service address, path prefix such as `/prometheus` for Mimir, HTTPS) before pinned and discovered query APIs, and
   list no services when it has the GPU series.
+- AMD Device Metrics Exporter (`amd_gpu_gfx_activity`, `amd_gpu_used_vram`, `amd_gpu_average_package_power` and the
+  uncorrectable ECC total) is a third metrics source, next to dcgm-exporter and the per-process exporter. Pod labels
+  the exporter stamps from a device-plugin allocation or a DRA claim become the pod rows; the exporter pod itself is
+  not counted as a workload.
+- A cluster with DRA GPUs and no metrics exporter no longer shows the missing-exporter message as a failed scrape.
+  Allocation and Namespaces still render; the note says utilisation, VRAM and power stay empty.
+- AMD GPUs: recognise the AMD DRA driver (`gpu.amd.com`) and the device-plugin resource `amd.com/gpu`. ResourceSlices
+  and ResourceClaims from the ROCm DRA driver count for Allocation, Pending, Namespaces and pod GPU presence the same
+  way NVIDIA DRA does; whole GPUs (`amdgpu`) and compute partitions (`amdgpu-partition`, with `partitionProfile` /
+  `deviceID` / `parentDeviceID`) are parsed. Discovery also matches exporter pods whose name, image or labels mention
+  `amd` as a word of its own (`amd.com`, `amd-device-metrics-exporter`, but not `amd64`) or `rocm`.
+- AMD GPUs split into compute partitions: the exporter publishes utilisation and power for partition 0 of a card only.
+  A pod on any other partition is no longer shown as 0 % and listed on Idle & waste: its utilisation and power read
+  "N/A" (it is unmeasured, not idle), and it is left out of the namespace averages. A pod on partition 0 shows the
+  reading of the whole card, siblings' load included, and is marked "whole card".
 
 ## 1.0.0
 
