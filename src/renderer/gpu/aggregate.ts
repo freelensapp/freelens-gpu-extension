@@ -929,17 +929,18 @@ export function usesGpuResource(resources: Record<string, string> | undefined): 
   return Object.entries(resources ?? {}).some(([k, v]) => isGpuResourceName(k) && (Number(v) || 0) > 0);
 }
 
-/**
- * Total power over devices, counted once per physical card. On MIG every
- * slice repeats its card's DCGM_FI_DEV_POWER_USAGE, so a plain sum
- * multiplies a 7-slice A100's draw by 7.
- */
+/** A device with no pod on it and utilisation under `idlePct`. A partition with no published reading is never idle. */
 export function isIdleDevice(d: GpuDevice, idlePct: number): boolean {
   // An AMD partition the exporter publishes no utilisation for reads N/A, not 0 %: it is not idle.
   if (d.partitioned && !d.utilPublished) return false;
   return d.pods.length === 0 && d.utilPct < idlePct;
 }
 
+/**
+ * Total power over devices, counted once per physical card. On MIG every
+ * slice repeats its card's DCGM_FI_DEV_POWER_USAGE, so a plain sum
+ * multiplies a 7-slice A100's draw by 7.
+ */
 export function totalPowerW(devs: GpuDevice[]): number {
   const byCard = new Map<string, number>();
   for (const d of devs) {
