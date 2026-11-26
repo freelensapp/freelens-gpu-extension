@@ -528,26 +528,33 @@ export class GpuScraper {
         this.metricsNote = "";
         return this.aggregate(viaProm.bodies, viaProm.scraped);
       }
-      const lines = [
-        `No GPU metrics exporter found (${this.lastPodCount} pods listed, ${this.lastCandidateCount} GPU-looking candidates probed).`,
-        "An exporter is recognised when its /metrics emits DCGM_FI_DEV_*, gpu_process_memory_bytes or amd_gpu_*; no Prometheus-compatible",
-        "query API with those series was found either. Pin a target on the Exporters page if discovery misses yours.",
-        ...this.lastProbes.map((p) => `  ${p.target}: ${p.outcome}${p.detail ? ` — ${p.detail}` : ""}`),
-      ];
+      const head = `No GPU metrics exporter found (${this.lastPodCount} pods listed, ${this.lastCandidateCount} GPU-looking candidates probed).`;
+      const pin = "Pin a target on the Exporters page if discovery misses yours.";
+      const probes = this.lastProbes.map((p) => `  ${p.target}: ${p.outcome}${p.detail ? ` — ${p.detail}` : ""}`);
       if (this.lastCandidateCount === 0 && this.lastPodCount === 0) {
-        lines.push("  (no pods returned at all — check that this kubeconfig can list pods cluster-wide)");
+        probes.push("  (no pods returned at all — check that this kubeconfig can list pods cluster-wide)");
       }
+      const lines = [
+        head,
+        "An exporter is recognised when its /metrics emits DCGM_FI_DEV_*, gpu_process_memory_bytes or amd_gpu_*; no Prometheus-compatible query API with those series was found either.",
+        pin,
+        ...probes,
+      ];
       const draDevices = [...(this.dra?.devicesByNode.values() ?? [])].reduce((n, ds) => n + ds.length, 0);
       if (draDevices > 0) {
         // DRA still describes the devices. An empty snapshot lets Allocation and Namespaces render; the note says why
         // utilisation, VRAM and power are blank.
+        // One paragraph of sentences, then one line per probe: the pin hint says how to point at an exporter the
+        // discovery missed, the probes say what was tried. The note is shown with pre-wrap (gpuext-note).
         this.metricsNote = [
-          lines[0],
-          `DRA published ${draDevices} GPU device${draDevices === 1 ? "" : "s"}. Allocation and namespace counts come from ResourceSlices and ResourceClaims.`,
-          "Utilisation, VRAM and power stay empty until an exporter emits DCGM_FI_DEV_*, gpu_process_memory_bytes or amd_gpu_*.",
-          // The pin hint and the probes say what was tried and how to point at the exporter.
-          ...lines.slice(2),
-        ].join(" ");
+          [
+            head,
+            `DRA published ${draDevices} GPU device${draDevices === 1 ? "" : "s"}. Allocation and namespace counts come from ResourceSlices and ResourceClaims.`,
+            "Utilisation, VRAM and power stay empty until an exporter emits DCGM_FI_DEV_*, gpu_process_memory_bytes or amd_gpu_*.",
+            pin,
+          ].join(" "),
+          ...probes,
+        ].join("\n");
         return { scrapedAt: new Date(), mode: "pod", rows: [], gpus: [], exporters: [] };
       }
       this.metricsNote = "";

@@ -105,7 +105,11 @@ describe("GpuScraper pod state", () => {
         },
       ],
     });
-    const pods = [pod({ ns: "dra-test", name: "holder", phase: "Running", node: "n1" })];
+    const pods = [
+      pod({ ns: "dra-test", name: "holder", phase: "Running", node: "n1" }),
+      // A candidate whose /metrics has no GPU series: it becomes a probe line in the note.
+      pod({ ns: "kube-amd-gpu", name: "amd-metrics-exporter-x", phase: "Running", node: "n1", ports: [5000] }),
+    ];
     const s = new GpuScraper({
       clusterId: () => "c1",
       listPods: async () => pods as never,
@@ -117,8 +121,11 @@ describe("GpuScraper pod state", () => {
     expect(snap.rows).toEqual([]);
     expect(snap.exporters).toEqual([]);
     expect(s.metricsNote).toMatch(/DRA published 1 GPU device/);
-    // The note keeps the pin hint, so the user knows how to point at an exporter the discovery missed.
-    expect(s.metricsNote).toMatch(/Pin a target on the Exporters page/);
+    // The note keeps the pin hint, so the user knows how to point at an exporter the discovery missed. It is a sentence
+    // of its own, after the last sentence of the paragraph, and the probes follow on lines of their own.
+    expect(s.metricsNote).toContain("amd_gpu_*. Pin a target on the Exporters page if discovery misses yours.\n  ");
+    expect(s.metricsNote).toMatch(/\n {2}\S.*amd-metrics-exporter-x/);
+    expect(s.metricsNote).not.toMatch(/amd_gpu_\*\.\s+query API/);
     expect(s.podState?.draDevicesByNode?.n1).toMatchObject({ count: 1 });
     expect(s.podState?.requestedByNamespace["dra-test"]).toMatchObject({
       gpus: 1,
