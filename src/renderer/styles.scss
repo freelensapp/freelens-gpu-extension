@@ -184,6 +184,16 @@
 .gpuext-link:hover {
   text-decoration: underline;
 }
+/* The lookback windows in the subtitle of Idle & waste: the one shown is plain text. */
+.gpuext-window {
+  margin-left: 6px;
+}
+.gpuext-window:disabled {
+  cursor: default;
+  color: inherit;
+  font-weight: bold;
+  text-decoration: none;
+}
 .gpuext-pins {
   margin-bottom: var(--padding);
 }
